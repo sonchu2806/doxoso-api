@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
 const cron = require('node-cron');
+const axios = require('axios');
+const cheerio = require('cheerio');
 
 const app = express();
 app.use(cors());
@@ -176,6 +178,99 @@ async function getUrlFromKySo(product, kyso) {
   return url;
 }
 
+async function fetchHTML(url) {
+  try {
+    const { data } = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html',
+        'Accept-Language': 'vi-VN,vi;q=0.9',
+      },
+      timeout: 10000,
+    });
+    return data;
+  } catch (e) {
+    return null;
+  }
+}
+
+function parseVietlottByCheerio(product, html) {
+  const $ = cheerio.load(html);
+  const bodyText = $('body').text() || '';
+
+  const titleText = $('div.title_tt').first().text() || '';
+  const headerText = $('div.kythuong, div.kyve').first().text() || '';
+  const kySo =
+    ($('span.period_live').first().text() || '').replace(/[^0-9]/g, '') ||
+    ($('span#cur_ky').first().text() || '').replace(/[^0-9]/g, '') ||
+    ((titleText.match(/#(\d+)/) || [])[1] || '') ||
+    ((headerText.match(/#(\d+)/) || [])[1] || '');
+
+  const drawDate =
+    ((titleText.match(/(\d{2})\/(\d{2})\/(\d{4})/) || [])[0]) ||
+    ((headerText.match(/(\d{2})\/(\d{2})\/(\d{4})/) || [])[0]) ||
+    ((bodyText.match(/(\d{2})\/(\d{2})\/(\d{4})/) || [])[0]) ||
+    new Date().toLocaleDateString('vi-VN');
+
+  if (product === 'max3d' || product === 'max3dpro') {
+    const groups = {};
+    $('span[id^="max3d_G"]').each((_, el) => {
+      const id = ($(el).attr('id') || '').trim();
+      const match = id.match(/max3d_G(\d+)_(\d+)_(\d+)/);
+      if (!match) return;
+      const [, prize, set, pos] = match;
+      const key = 'G' + prize + '_' + set;
+      if (!groups[key]) groups[key] = { prize: 'G' + prize, set, nums: [] };
+      const num = parseInt($(el).text().trim(), 10);
+      if (!isNaN(num)) groups[key].nums[parseInt(pos, 10) - 1] = num;
+    });
+
+    const sets = Object.entries(groups)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, { prize, set, nums }]) => ({
+        label: (PRIZE_LABELS[prize] || prize) + ' bộ ' + set,
+        numbers: nums.filter((n) => !isNaN(n)),
+      }))
+      .filter((x) => x.numbers.length > 0);
+
+    if (sets.length === 0) return null;
+    return { sets, drawDate, kySo };
+  }
+
+  const selectorMap = {
+    mega: 'span.ball_orange, span.ball.ball_orange',
+    power: 'span.ball_power, span.ball.ball_power',
+    keno: 'span.ball_keno, span.ball.ball_keno',
+    lotto535: 'span.ball_lotto:not(.ball_power2)',
+    max3d: 'span[id^="max3d_G"]',
+  };
+  const selector = selectorMap[product] || 'span[class*="ball"]';
+  const numbers = $(selector)
+    .map((_, el) => parseInt($(el).text().trim(), 10))
+    .get()
+    .filter((n) => !isNaN(n) && n >= 1);
+
+  if (numbers.length === 0) return null;
+
+  let powerNumber = null;
+  if (product === 'lotto535' || product === 'power') {
+    const powerText = $('span.ball_lotto.ball_power2, span.ball.ball_lotto.ball_power2, span.ball_power2, span.ball.ball_power2')
+      .first()
+      .text()
+      .trim();
+    const parsedPower = parseInt(powerText, 10);
+    powerNumber = isNaN(parsedPower) ? null : parsedPower;
+  }
+
+  const maxMap = { keno: 20, lotto535: 5, mega: 6, power: 6 };
+  return {
+    numbers: [...new Set(numbers)].slice(0, maxMap[product] || 6),
+    powerNumber,
+    kySo,
+    drawDate,
+  };
+}
+
 async function scrapeVietlott(product, kyso) {
   const cacheKey = 'vl_' + product + (kyso ? '_' + kyso : '');
   const cached = getCache(cacheKey);
@@ -183,6 +278,16 @@ async function scrapeVietlott(product, kyso) {
 
   const url = kyso ? await getUrlFromKySo(product, kyso) : VL_URLS[product];
   if (!url) throw new Error('Unknown product: ' + product);
+
+  const html = await fetchHTML(url);
+  if (html) {
+    const quickResult = parseVietlottByCheerio(product, html);
+    if (quickResult) {
+      console.log('[' + product + '] using axios+cheerio');
+      setCache(cacheKey, quickResult);
+      return quickResult;
+    }
+  }
 
   return withBrowser(async (browser) => {
     const page = await browser.newPage();
@@ -441,6 +546,89 @@ function detectRegionByDai(dai) {
   return 'mn';
 }
 
+function parseAllXSKTByCheerio(html) {
+  const $ = cheerio.load(html);
+
+  const normalizePrizeLabel = (raw, cls = '') => {
+    const text = String(raw || '').trim().toLowerCase();
+    if (text.includes('đặc biệt') || cls.includes('giaidb')) return 'Giải đặc biệt';
+    if (text.includes('giải nhất') || text === 'g1' || cls.includes('giai1')) return 'Giải nhất';
+    if (text.includes('giải nhì') || text === 'g2' || cls.includes('giai2')) return 'Giải nhì';
+    if (text.includes('giải ba') || text === 'g3' || cls.includes('giai3')) return 'Giải ba';
+    if (text.includes('giải tư') || text === 'g4' || cls.includes('giai4')) return 'Giải tư';
+    if (text.includes('giải năm') || text === 'g5' || cls.includes('giai5')) return 'Giải năm';
+    if (text.includes('giải sáu') || text === 'g6' || cls.includes('giai6')) return 'Giải sáu';
+    if (text.includes('giải bảy') || text === 'g7' || cls.includes('giai7')) return 'Giải bảy';
+    if (text.includes('giải tám') || text === 'g8' || cls.includes('giai8')) return 'Giải tám';
+    return String(raw || '').trim() || 'Giải';
+  };
+
+  const extractNumbers = ($cell) => {
+    const byNode = $cell
+      .find('div.giaiSo, span.giaiSo, b, strong')
+      .map((_, el) => ($(el).text() || '').trim().replace(/\D/g, ''))
+      .get()
+      .filter((n) => n.length >= 2);
+    if (byNode.length > 0) return byNode;
+    return ($cell.text() || '')
+      .split(/\s+/)
+      .map((x) => x.replace(/\D/g, ''))
+      .filter((n) => n.length >= 2);
+  };
+
+  const allResults = {};
+  $('table.bangketquaSo').each((_, tableEl) => {
+    const $table = $(tableEl);
+    const provinceNames = $table.find('td.tinh')
+      .map((__, el) => ($(el).text() || '').trim())
+      .get()
+      .filter(Boolean);
+    if (provinceNames.length === 0) return;
+
+    const provincePrizes = provinceNames.map(() => []);
+    const specialByProvince = provinceNames.map(() => '');
+
+    $table.find('tr').each((__, rowEl) => {
+      const $row = $(rowEl);
+      const className = String($row.attr('class') || '').toLowerCase();
+      const labelCell = $row.find('td.giai, td:first-child').first();
+      const rawLabel = labelCell.length ? (labelCell.text() || '').trim() : '';
+
+      const prizeCells = $row.find('td[class*="giai"]').filter((___, cell) => {
+        const cls = String($(cell).attr('class') || '').toLowerCase();
+        return cls.includes('giai') && !cls.includes('giai_tinh') && !cls.includes('giai_text');
+      }).toArray();
+      if (prizeCells.length < provinceNames.length) return;
+
+      const prizeLabel = normalizePrizeLabel(rawLabel, className + ' ' + String($(prizeCells[0]).attr('class') || '').toLowerCase());
+      for (let i = 0; i < provinceNames.length; i++) {
+        const nums = extractNumbers($(prizeCells[i]));
+        if (nums.length === 0) continue;
+        provincePrizes[i].push({ label: prizeLabel, numbers: nums });
+        if (prizeLabel === 'Giải đặc biệt' && !specialByProvince[i]) {
+          specialByProvince[i] = nums[0];
+        }
+      }
+    });
+
+    for (let i = 0; i < provinceNames.length; i++) {
+      const daiName = provinceNames[i];
+      if (!daiName || provincePrizes[i].length === 0) continue;
+      const specialPrize =
+        specialByProvince[i] ||
+        (provincePrizes[i].find((p) => p.label === 'Giải đặc biệt')?.numbers?.[0] || '');
+
+      allResults[daiName] = {
+        specialPrize,
+        prizes: provincePrizes[i],
+        drawDate: new Date().toLocaleDateString('vi-VN'),
+      };
+    }
+  });
+
+  return allResults;
+}
+
 async function scrapeAllXSKT(dateStr, region = 'mn') {
   const safeRegion = ['mb', 'mt', 'mn'].includes(region) ? region : 'mn';
   const cacheKey = 'xskt_all_' + safeRegion + '_' + (dateStr || 'today');
@@ -450,6 +638,16 @@ async function scrapeAllXSKT(dateStr, region = 'mn') {
   const url = dateStr
     ? 'https://www.minhngoc.net.vn/ket-qua-xo-so/mien-' + (safeRegion === 'mb' ? 'bac' : safeRegion === 'mt' ? 'trung' : 'nam') + '/' + dateStr + '.html'
     : 'https://www.minhngoc.net.vn/';
+
+  const html = await fetchHTML(url);
+  if (html) {
+    const quickResults = parseAllXSKTByCheerio(html);
+    if (Object.keys(quickResults).length > 0) {
+      console.log('[XSKT all] using axios+cheerio, tìm được', Object.keys(quickResults).length, 'đài');
+      setCache(cacheKey, quickResults);
+      return quickResults;
+    }
+  }
 
   return withBrowser(async (browser) => {
     const page = await browser.newPage();
