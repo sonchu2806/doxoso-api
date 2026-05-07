@@ -659,7 +659,7 @@ cron.schedule('*/5 16-21 * * *', () => {
   Object.keys(VL_URLS).forEach(p => scrapeVietlott(p, null).catch(() => {}));
 });
 
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => {
   console.log('✅ Doxoso API server chạy tại http://localhost:' + PORT);
   console.log('✅ Mobile access: http://172.20.10.12:' + PORT);
