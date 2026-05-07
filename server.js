@@ -280,6 +280,9 @@ async function scrapeVietlott(product, kyso) {
   if (!url) throw new Error('Unknown product: ' + product);
 
   const html = await fetchHTML(url);
+  console.log('[axios ' + product + '] HTML length:', html?.length);
+  console.log('[axios ' + product + '] has ball_power:', html?.includes('ball_power'));
+  console.log('[axios ' + product + '] has ball_orange:', html?.includes('ball_orange'));
   if (html) {
     const quickResult = parseVietlottByCheerio(product, html);
     if (quickResult) {
