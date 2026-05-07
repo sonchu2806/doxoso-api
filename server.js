@@ -146,7 +146,7 @@ async function getCurrentInfo(product) {
   });
 
   console.log('[getCurrentInfo ' + product + ']:', info);
-  cache[cacheKey] = { data: info, timestamp: Date.now() };
+  cache[cacheKey] = { data: info, timestamp: Date.now() - CACHE_TTL + 60 * 60 * 1000 };
   return info;
 }
 
@@ -842,7 +842,7 @@ app.get('/vietlott/:product/list', async (req, res) => {
       } while (!drawDays.includes(current.getDay()));
     }
 
-    setCache(listCacheKey, list);
+    cache[listCacheKey] = { data: list, timestamp: Date.now() - CACHE_TTL + 30 * 60 * 1000 };
     res.json({ success: true, data: list });
   } catch(e) {
     res.status(500).json({ success: false, error: e.message });
