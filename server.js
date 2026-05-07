@@ -72,6 +72,10 @@ async function withBrowser(fn) {
       '--ignore-certificate-errors',
       '--disable-dev-shm-usage',
       '--disable-gpu',
+      '--no-first-run',
+      '--no-zygote',
+      '--single-process',
+      '--disable-extensions',
     ],
   });
 
@@ -101,7 +105,7 @@ async function getCurrentInfo(product) {
   const info = await withBrowser(async (browser) => {
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-    await page.goto(VL_URLS[product], { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.goto(VL_URLS[product], { waitUntil: 'networkidle2', timeout: 60000 });
     await new Promise(r => setTimeout(r, 3000));
     return page.evaluate(() => {
       let currentKy = '';
@@ -183,8 +187,8 @@ async function scrapeVietlott(product, kyso) {
   return withBrowser(async (browser) => {
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 4000));
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+    await new Promise(r => setTimeout(r, 5000));
 
     // MAX 3D / MAX 3D PRO
     if (product === 'max3d' || product === 'max3dpro') {
@@ -349,7 +353,7 @@ async function scrapeKenoByKySo(kyso) {
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
     // Trang tra cứu Keno có form search theo kỳ
     await page.goto('https://www.ketquadientoan.com/ket-qua-xo-so-dien-toan-keno.html', {
-      waitUntil: 'networkidle2', timeout: 30000,
+      waitUntil: 'networkidle2', timeout: 60000,
     });
     await new Promise(r => setTimeout(r, 3000));
 
@@ -450,8 +454,8 @@ async function scrapeAllXSKT(dateStr, region = 'mn') {
   return withBrowser(async (browser) => {
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 4000));
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+    await new Promise(r => setTimeout(r, 5000));
 
     const results = await page.evaluate(() => {
       const normalizePrizeLabel = (raw, cls = '') => {
