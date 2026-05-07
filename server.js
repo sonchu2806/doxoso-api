@@ -100,54 +100,63 @@ async function withBrowser(fn) {
 async function getCurrentInfo(product) {
   const cacheKey = 'current_' + product;
   const cached = cache[cacheKey];
-  if (cached && Date.now() - cached.timestamp < CURRENT_INFO_TTL) {
-    return cached.data;
-  }
+  if (cached && Date.now() - cached.timestamp < 60 * 60 * 1000) return cached.data;
 
-  const info = await withBrowser(async (browser) => {
-    const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-    await page.goto(VL_URLS[product], { waitUntil: 'networkidle2', timeout: 60000 });
-    await new Promise(r => setTimeout(r, 3000));
-    return page.evaluate(() => {
-      let currentKy = '';
-      let currentDate = '';
+  const url = VL_URLS[product];
+  if (!url) return { currentKy: '', currentDate: '' };
 
-      // Thử div.kythuong trước (Mega, Lotto535, Max3D)
-      const kythuong = document.querySelector('div.kythuong');
-      if (kythuong) {
-        const text = kythuong.textContent;
-        const kyMatch = text.match(/#(\d+)/);
-        const dateMatch = text.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-        if (kyMatch) currentKy = kyMatch[1];
-        if (dateMatch) currentDate = dateMatch[0];
-      }
-
-      // Thử div.kyve (Power, các trang khác)
-      if (!currentKy || !currentDate) {
-        const kyve = document.querySelector('div.kyve');
-        if (kyve) {
-          const text = kyve.textContent;
-          const kyMatch = text.match(/#(\d+)/);
-          const dateMatch = text.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-          if (kyMatch && !currentKy) currentKy = kyMatch[1];
-          if (dateMatch && !currentDate) currentDate = dateMatch[0];
-        }
-      }
-
-      // Fallback: span.period_live hoặc span#cur_ky
-      if (!currentKy) {
-        const periodEl = document.querySelector('span.period_live, span#cur_ky');
-        if (periodEl) currentKy = periodEl.textContent.trim().replace(/[^0-9]/g, '');
-      }
-
-      return { currentKy, currentDate };
+  try {
+    const { data: html } = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept-Language': 'vi-VN,vi;q=0.9',
+      },
+      timeout: 15000,
     });
-  });
 
-  console.log('[getCurrentInfo ' + product + ']:', info);
-  cache[cacheKey] = { data: info, timestamp: Date.now() - CACHE_TTL + 60 * 60 * 1000 };
-  return info;
+    const $ = cheerio.load(html);
+    let currentKy = '';
+    let currentDate = '';
+
+    // Thử div.kythuong
+    const kythuong = $('div.kythuong').first().text();
+    if (kythuong) {
+      const kyMatch = kythuong.match(/#(\d+)/);
+      const dateMatch = kythuong.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+      if (kyMatch) currentKy = kyMatch[1];
+      if (dateMatch) currentDate = dateMatch[0];
+    }
+
+    // Thử div.kyve
+    if (!currentKy) {
+      const kyve = $('div.kyve').first().text();
+      if (kyve) {
+        const kyMatch = kyve.match(/#(\d+)/);
+        const dateMatch = kyve.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        if (kyMatch) currentKy = kyMatch[1];
+        if (dateMatch && !currentDate) currentDate = dateMatch[0];
+      }
+    }
+
+    // Thử span.period_live
+    if (!currentKy) {
+      const period = $('span.period_live').first().text();
+      if (period) currentKy = period.replace(/[^0-9]/g, '');
+    }
+
+    // Thử span#cur_ky cho keno
+    if (!currentKy) {
+      const curKy = $('span#cur_ky').first().text();
+      if (curKy) currentKy = curKy.replace(/[^0-9]/g, '');
+    }
+
+    const info = { currentKy, currentDate };
+    cache[cacheKey] = { data: info, timestamp: Date.now() };
+    return info;
+  } catch (e) {
+    console.warn('[getCurrentInfo ' + product + '] axios error:', e.message);
+    return { currentKy: '', currentDate: '' };
+  }
 }
 
 // Tính URL từ kyso
