@@ -282,54 +282,91 @@ async function scrapeWithAxios(url, product, kysoTarget) {
 
     // LOTTO535
     if (product === 'lotto535') {
-      // Thử nhiều selector cho kySo
-      let kySo = '';
-      let drawDate = '';
+      const allKys = [];
 
-      // Trang theo ngày: div.title_tt
-      $('div.title_tt').each((_, el) => {
-        const text = $(el).text();
-        const kyMatch = text.match(/#(\d+)/);
-        const dateMatch = text.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-        if (kyMatch && !kySo) kySo = kyMatch[1];
-        if (dateMatch && !drawDate) drawDate = dateMatch[0];
+      // Trang theo ngày có nhiều title_tt (21h trước, 13h sau)
+      $('div.title_tt').each((_, titleEl) => {
+        const titleText = $(titleEl).text();
+        const kyMatch = titleText.match(/#(\d+)/);
+        if (!kyMatch) return;
+
+        const parent = $(titleEl).parent();
+        const nums = [];
+        let power = null;
+        parent.find('span.ball_lotto').each((_, el) => {
+          const cls = $(el).attr('class') || '';
+          const n = parseInt($(el).text().trim());
+          if (isNaN(n)) return;
+          if (cls.includes('ball_power2')) power = n;
+          else nums.push(n);
+        });
+        if (nums.length > 0) {
+          allKys.push({
+            ky: kyMatch[1],
+            numbers: nums.slice(0, 5),
+            powerNumber: power,
+            drawDate: titleText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '',
+          });
+        }
       });
 
-      // Trang trực tiếp: span.period_live, div.kyve, div.kythuong
-      if (!kySo) {
+      // Trang trực tiếp chỉ có 1 kỳ, fallback từ toàn trang
+      if (allKys.length === 0) {
+        let kySo = '';
+        let drawDate = '';
         const els = ['span.period_live', 'div.kyve', 'div.kythuong'];
         for (const sel of els) {
           const text = $(sel).first().text();
           const kyMatch = text.match(/#(\d+)/);
           const dateMatch = text.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-          if (kyMatch) { kySo = kyMatch[1]; }
-          if (dateMatch) { drawDate = dateMatch[0]; }
+          if (kyMatch) kySo = kyMatch[1];
+          if (dateMatch) drawDate = dateMatch[0];
           if (kySo) break;
         }
+        if (!drawDate) drawDate = new Date().toLocaleDateString('vi-VN');
+
+        const numbers = [];
+        let powerNumber = null;
+        $('span.ball_lotto').each((_, el) => {
+          const cls = $(el).attr('class') || '';
+          const n = parseInt($(el).text().trim());
+          if (isNaN(n)) return;
+          if (cls.includes('ball_power2')) powerNumber = n;
+          else numbers.push(n);
+        });
+        if (numbers.length === 0) return null;
+        allKys.push({
+          ky: kySo || '',
+          numbers: numbers.slice(0, 5),
+          powerNumber,
+          drawDate,
+        });
       }
 
-      if (!drawDate) drawDate = new Date().toLocaleDateString('vi-VN');
+      const targetKyNum = kysoTarget ? parseInt(kysoTarget) : null;
+      let target = null;
 
-      // Parse numbers từ toàn trang (trang trực tiếp chỉ có 1 kỳ)
-      const numbers = [];
-      let powerNumber = null;
-      $('span.ball_lotto').each((_, el) => {
-        const cls = $(el).attr('class') || '';
-        const n = parseInt($(el).text().trim());
-        if (isNaN(n)) return;
-        if (cls.includes('ball_power2')) {
-          powerNumber = n;
-        } else {
-          numbers.push(n);
+      if (targetKyNum) {
+        // Tìm chính xác theo kySo
+        target = allKys.find(k => k.ky === kysoTarget);
+
+        // Nếu không tìm thấy theo ky label → dùng index
+        if (!target && allKys.length > 0) {
+          // Kỳ lẻ → index 1 (kỳ 13h), kỳ chẵn → index 0 (kỳ 21h)
+          const isOdd = targetKyNum % 2 === 1;
+          target = isOdd ? allKys[1] : allKys[0];
+          if (target) target = { ...target, ky: kysoTarget };
         }
-      });
+      } else {
+        target = allKys[0];
+      }
 
-      if (numbers.length === 0) return null;
+      if (!target) return null;
       return {
-        numbers: numbers.slice(0, 5),
-        powerNumber,
-        kySo,
-        drawDate,
+        numbers: target.numbers,
+        powerNumber: target.powerNumber,
+        kySo: target.ky,
+        drawDate: target.drawDate,
       };
     }
 
