@@ -38,7 +38,7 @@ const BASE_URL_MAP = {
   keno:     'ket-qua-xo-so-dien-toan-keno',
   max3d:    'ket-qua-xo-so-dien-toan-max-3d',
   max3dpro: 'ket-qua-xo-so-dien-toan-max3d-pro',
-  lotto535: 'ket-qua-xo-so-dien-toan-lotto-5-35',
+  lotto535: 'ket-qua-xo-so-dien-toan-lotto-535',
 };
 
 const DRAW_DAYS = {
