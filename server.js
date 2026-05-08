@@ -927,6 +927,29 @@ async function scrapeXSKT(dai, dateStr, region) {
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
+app.get('/test-connection', async (req, res) => {
+  const urls = [
+    'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-lotto-535.html',
+    'https://www.minhngoc.net.vn/',
+    'https://xoso.com.vn/',
+  ];
+
+  const results = {};
+  for (const url of urls) {
+    try {
+      const start = Date.now();
+      const { status } = await axios.get(url, {
+        timeout: 10000,
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      });
+      results[url] = { ok: true, status, ms: Date.now() - start };
+    } catch (e) {
+      results[url] = { ok: false, error: e.message };
+    }
+  }
+  res.json(results);
+});
+
 app.get('/xskt/all', async (req, res) => {
   const { date, region } = req.query;
   try {
