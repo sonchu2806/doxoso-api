@@ -203,6 +203,82 @@ async function fetchHTML(url) {
   }
 }
 
+async function scrapeWithAxios(url, product) {
+  try {
+    const { data: html } = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept-Language': 'vi-VN,vi;q=0.9',
+      },
+      timeout: 15000,
+    });
+
+    const $ = cheerio.load(html);
+
+    if (product === 'max3d' || product === 'max3dpro') {
+      const sets = {};
+      $('span[id^="max3d_G"]').each((_, el) => {
+        const match = el.attribs.id.match(/max3d_G(\d+)_(\d+)_(\d+)/);
+        if (!match) return;
+        const [, prize, set, pos] = match;
+        const key = 'G' + prize + '_' + set;
+        if (!sets[key]) sets[key] = { prize: 'G' + prize, set, nums: [] };
+        sets[key].nums[parseInt(pos) - 1] = parseInt($(el).text().trim());
+      });
+      const setsArr = Object.entries(sets)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([, { prize, set, nums }]) => ({
+          label: (PRIZE_LABELS[prize] || prize) + ' bộ ' + set,
+          numbers: nums.filter((n) => !isNaN(n)),
+        }));
+      if (setsArr.length === 0) return null;
+
+      const kySo = $('div.title_tt').first().text().match(/#(\d+)/)?.[1] || '';
+      const drawDate = $('div.title_tt').first().text().match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '';
+      return { sets: setsArr, kySo, drawDate };
+    }
+
+    const selectorMap = {
+      mega: 'span.ball_orange, span.ball.ball_orange',
+      power: 'span.ball_power, span.ball.ball_power',
+      keno: 'span.ball_keno, span.ball.ball_keno',
+      lotto535: 'span.ball_lotto:not(.ball_power2)',
+    };
+
+    const numbers = [];
+    $(selectorMap[product] || 'span[class*="ball"]').each((_, el) => {
+      const n = parseInt($(el).text().trim());
+      if (!isNaN(n) && n >= 1) numbers.push(n);
+    });
+
+    let powerNumber = null;
+    if (product === 'lotto535') {
+      const powerEl = $('span.ball_lotto.ball_power2, span.ball.ball_lotto.ball_power2').first();
+      if (powerEl.length) powerNumber = parseInt(powerEl.text().trim());
+    }
+
+    const maxMap = { keno: 20, lotto535: 5, mega: 6, power: 6 };
+    const uniqueNums = [...new Set(numbers)].slice(0, maxMap[product] || 6);
+    if (uniqueNums.length === 0) return null;
+
+    // Parse kySo và drawDate từ div.title_tt
+    const titleTt = $('div.title_tt').first().text();
+    const kySo =
+      titleTt.match(/#(\d+)/)?.[1] ||
+      $('span.period_live').first().text().replace(/[^0-9]/g, '') ||
+      '';
+    const drawDate =
+      titleTt.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] ||
+      $('div.kythuong, div.kyve').first().text().match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] ||
+      '';
+
+    return { numbers: uniqueNums, powerNumber, kySo, drawDate };
+  } catch (e) {
+    console.log('[scrapeWithAxios] failed:', e.message);
+    return null;
+  }
+}
+
 function parseVietlottByCheerio(product, html) {
   const $ = cheerio.load(html);
   const bodyText = $('body').text() || '';
@@ -288,18 +364,14 @@ async function scrapeVietlott(product, kyso) {
   const url = kyso ? await getUrlFromKySo(product, kyso) : VL_URLS[product];
   if (!url) throw new Error('Unknown product: ' + product);
 
-  const html = await fetchHTML(url);
-  console.log('[axios ' + product + '] HTML length:', html?.length);
-  console.log('[axios ' + product + '] has ball_power:', html?.includes('ball_power'));
-  console.log('[axios ' + product + '] has ball_orange:', html?.includes('ball_orange'));
-  if (html) {
-    const quickResult = parseVietlottByCheerio(product, html);
-    if (quickResult) {
-      console.log('[' + product + '] using axios+cheerio');
-      setCache(cacheKey, quickResult);
-      return quickResult;
-    }
+  // Thử axios trước
+  const axiosResult = await scrapeWithAxios(url, product);
+  if (axiosResult) {
+    console.log('[' + product + '] axios success');
+    setCache(cacheKey, axiosResult);
+    return axiosResult;
   }
+  console.log('[' + product + '] axios failed, trying puppeteer');
 
   return withBrowser(async (browser) => {
     const page = await browser.newPage();
