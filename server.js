@@ -257,24 +257,44 @@ async function scrapeWithAxios(url, product, kysoTarget) {
       return { sets: setsArr, kySo, drawDate };
     }
 
-    // Với lotto535, nếu có kysoTarget thì cố gắng parse đúng section kỳ đó
-    let scope = $;
-    let matchedTitleText = '';
-    if (product === 'lotto535' && kysoTarget) {
-      let targetSection = null;
-      $('div.title_tt').each((_, el) => {
-        const text = $(el).text();
-        if (text.includes('#' + kysoTarget) && !targetSection) {
-          const section = $(el).closest('.box_kqxsdt, .bangketqua, div[class*="ketqua"]');
-          if (section && section.length) {
-            targetSection = section;
-            matchedTitleText = text;
-          }
+    if (product === 'lotto535') {
+      let foundKySo = '';
+      let foundNumbers = [];
+      let foundPower = null;
+
+      $('div.title_tt').each((_, titleEl) => {
+        const titleText = $(titleEl).text();
+        const kyMatch = titleText.match(/#(\d+)/);
+        if (!kyMatch) return;
+
+        // Nếu có kysoTarget thì chỉ lấy kỳ đó
+        if (kysoTarget && kyMatch[1] !== kysoTarget) return;
+
+        // Lấy div.box_ketqua ngay sau title_tt này
+        const boxKetqua = $(titleEl).closest('.bkqtlotto, .bangketqua, div').next('.box_ketqua, div.box_ketqua');
+        const targetDiv = boxKetqua.length ? boxKetqua : $(titleEl).parent().find('.box_ketqua, div.box_ketqua').first();
+
+        if (targetDiv.length) {
+          foundNumbers = [];
+          targetDiv.find('span.ball_lotto:not(.ball_power2)').each((_, el) => {
+            const n = parseInt($(el).text().trim());
+            if (!isNaN(n) && n >= 1) foundNumbers.push(n);
+          });
+          const powerEl = targetDiv.find('span.ball_lotto.ball_power2').first();
+          foundPower = null;
+          if (powerEl.length) foundPower = parseInt(powerEl.text().trim());
         }
+
+        foundKySo = kyMatch[1];
+        if (foundNumbers.length > 0) return false; // break
       });
-      if (targetSection && targetSection.length) {
-        scope = targetSection;
+
+      if (foundNumbers.length > 0) {
+        const dateText = $('div.title_tt').first().text();
+        const drawDate = dateText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '';
+        return { numbers: foundNumbers.slice(0, 5), powerNumber: foundPower, kySo: foundKySo, drawDate };
       }
+      return null;
     }
 
     const selectorMap = {
@@ -285,16 +305,12 @@ async function scrapeWithAxios(url, product, kysoTarget) {
     };
 
     const numbers = [];
-    scope.find(selectorMap[product] || 'span[class*="ball"]').each((_, el) => {
+    $(selectorMap[product] || 'span[class*="ball"]').each((_, el) => {
       const n = parseInt($(el).text().trim());
       if (!isNaN(n) && n >= 1) numbers.push(n);
     });
 
     let powerNumber = null;
-    if (product === 'lotto535') {
-      const powerEl = scope.find('span.ball_lotto.ball_power2, span.ball.ball_lotto.ball_power2').first();
-      if (powerEl.length) powerNumber = parseInt(powerEl.text().trim());
-    }
     if (product === 'power') {
       const powerEl = $('span.ball_power2, span.ball.ball_power2').first();
       if (powerEl.length) powerNumber = parseInt(powerEl.text().trim());
@@ -305,11 +321,10 @@ async function scrapeWithAxios(url, product, kysoTarget) {
     if (uniqueNums.length === 0) return null;
 
     // Parse kySo và drawDate từ div.title_tt (ưu tiên đúng container kết quả)
-    const boxKqxsdt = scope.find('div.box_kqxsdt div.title_tt, div#noidung div.title_tt');
-    const titleEl = boxKqxsdt.length ? boxKqxsdt.first() : scope.find('div.title_tt').first();
+    const boxKqxsdt = $('div.box_kqxsdt div.title_tt, div#noidung div.title_tt');
+    const titleEl = boxKqxsdt.length ? boxKqxsdt.first() : $('div.title_tt').first();
     const titleText = titleEl.text();
     const kySo =
-      matchedTitleText.match(/#(\d+)/)?.[1] ||
       titleText.match(/#(\d+)/)?.[1] ||
       $('span.period_live').first().text().replace(/[^0-9]/g, '') ||
       '';
