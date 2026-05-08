@@ -45,8 +45,8 @@ const DRAW_DAYS = {
   mega:     [0, 3, 5],
   power:    [2, 4, 6],
   max3d:    [1, 3, 5],
-  max3dpro: [1, 3, 5],
-  lotto535: [0,1,2,3,4,5,6], // Mỗi ngày 2 kỳ
+  max3dpro: [2, 4, 6],
+  lotto535: [0,1,2,3,4,5,6],
   keno:     [0,1,2,3,4,5,6],
 };
 
@@ -102,52 +102,84 @@ async function getCurrentInfo(product) {
   const cached = cache[cacheKey];
   if (cached && Date.now() - cached.timestamp < 60 * 60 * 1000) return cached.data;
 
-  const url = VL_URLS[product];
-  if (!url) return { currentKy: '', currentDate: '' };
-
   try {
-    const { data: html } = await axios.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept-Language': 'vi-VN,vi;q=0.9',
-      },
-      timeout: 15000,
-    });
-
-    const $ = cheerio.load(html);
     let currentKy = '';
     let currentDate = '';
 
-    // Thử div.kythuong
-    const kythuong = $('div.kythuong').first().text();
-    if (kythuong) {
-      const kyMatch = kythuong.match(/#(\d+)/);
-      const dateMatch = kythuong.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-      if (kyMatch) currentKy = kyMatch[1];
-      if (dateMatch) currentDate = dateMatch[0];
-    }
+    if (product === 'max3d' || product === 'max3dpro') {
+      // Max3D dùng trang kết quả theo ngày (HTML tĩnh), thử từ hôm nay lùi tối đa 7 ngày.
+      for (let offset = 0; offset < 7; offset++) {
+        const day = new Date();
+        day.setDate(day.getDate() - offset);
+        const dd = String(day.getDate()).padStart(2, '0');
+        const mm = String(day.getMonth() + 1).padStart(2, '0');
+        const yyyy = day.getFullYear();
+        const todayUrl = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dd + '-' + mm + '-' + yyyy + '.html';
 
-    // Thử div.kyve
-    if (!currentKy) {
-      const kyve = $('div.kyve').first().text();
-      if (kyve) {
-        const kyMatch = kyve.match(/#(\d+)/);
-        const dateMatch = kyve.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-        if (kyMatch) currentKy = kyMatch[1];
-        if (dateMatch && !currentDate) currentDate = dateMatch[0];
+        try {
+          const { data: html } = await axios.get(todayUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Accept-Language': 'vi-VN,vi;q=0.9',
+            },
+            timeout: 20000,
+          });
+          const $ = cheerio.load(html);
+          const titleText = $('div.title_tt').first().text();
+          const kyMatch = titleText.match(/#(\d+)/);
+          const dateMatch = titleText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+          if (kyMatch) currentKy = kyMatch[1];
+          if (dateMatch) currentDate = dateMatch[0];
+          if (currentKy && currentDate) break;
+        } catch (_e) {
+          // tiếp tục thử ngày trước đó
+        }
       }
-    }
+    } else {
+      const url = VL_URLS[product];
+      if (!url) return { currentKy: '', currentDate: '' };
 
-    // Thử span.period_live
-    if (!currentKy) {
-      const period = $('span.period_live').first().text();
-      if (period) currentKy = period.replace(/[^0-9]/g, '');
-    }
+      const { data: html } = await axios.get(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept-Language': 'vi-VN,vi;q=0.9',
+        },
+        timeout: 20000,
+      });
 
-    // Thử span#cur_ky cho keno
-    if (!currentKy) {
-      const curKy = $('span#cur_ky').first().text();
-      if (curKy) currentKy = curKy.replace(/[^0-9]/g, '');
+      const $ = cheerio.load(html);
+
+      // Thử div.kythuong
+      const kythuong = $('div.kythuong').first().text();
+      if (kythuong) {
+        const kyMatch = kythuong.match(/#(\d+)/);
+        const dateMatch = kythuong.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        if (kyMatch) currentKy = kyMatch[1];
+        if (dateMatch) currentDate = dateMatch[0];
+      }
+
+      // Thử div.kyve
+      if (!currentKy) {
+        const kyve = $('div.kyve').first().text();
+        if (kyve) {
+          const kyMatch = kyve.match(/#(\d+)/);
+          const dateMatch = kyve.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+          if (kyMatch) currentKy = kyMatch[1];
+          if (dateMatch && !currentDate) currentDate = dateMatch[0];
+        }
+      }
+
+      // Thử span.period_live
+      if (!currentKy) {
+        const period = $('span.period_live').first().text();
+        if (period) currentKy = period.replace(/[^0-9]/g, '');
+      }
+
+      // Thử span#cur_ky cho keno
+      if (!currentKy) {
+        const curKy = $('span#cur_ky').first().text();
+        if (curKy) currentKy = curKy.replace(/[^0-9]/g, '');
+      }
     }
 
     if (product === 'lotto535') {
@@ -168,6 +200,14 @@ async function getCurrentInfo(product) {
     cache[cacheKey] = { data: info, timestamp: Date.now() };
     return info;
   } catch (e) {
+    if (e.message.includes('timeout')) {
+      // Tính kỳ hiện tại từ ngày hôm nay
+      const today = new Date();
+      const dd = String(today.getDate()).padStart(2, '0');
+      const mm = String(today.getMonth() + 1).padStart(2, '0');
+      const yyyy = today.getFullYear();
+      return { currentKy: '', currentDate: dd + '/' + mm + '/' + yyyy };
+    }
     console.warn('[getCurrentInfo ' + product + '] axios error:', e.message);
     return { currentKy: '', currentDate: '' };
   }
@@ -256,6 +296,8 @@ async function scrapeWithAxios(url, product, kysoTarget) {
 
     // MAX 3D
     if (product === 'max3d' || product === 'max3dpro') {
+      console.log('[max3d axios] span count:', $('span[id^="max3d_G"]').length);
+      if ($('span[id^="max3d_G"]').length === 0) return null;
       const groups = {};
       $('span[id^="max3d_G"]').each((_, el) => {
         const match = el.attribs?.id?.match(/max3d_G(\d+)_(\d+)_(\d+)/);
