@@ -178,49 +178,41 @@ async function getUrlFromKySo(product, kyso) {
   const info = await getCurrentInfo(product);
   if (!info.currentKy || !info.currentDate) return VL_URLS[product];
 
+  const currentKyNum = parseInt(info.currentKy);
+  const targetKyNum = parseInt(kyso);
+  const diff = currentKyNum - targetKyNum;
+  if (diff <= 0) return VL_URLS[product]; // kỳ hiện tại
+
+  const drawDays = DRAW_DAYS[product] || [0,1,2,3,4,5,6];
+  const [dd, mm, yyyy] = info.currentDate.split('/');
+
   if (product === 'lotto535') {
-    // Lotto535: 2 kỳ/ngày (13h và 21h)
-    // Kỳ lẻ (1,3,5...): 13h — Kỳ chẵn (2,4,6...): 21h
-    // currentKy là kỳ mới nhất đã quay
-    const currentKyNum = parseInt(info.currentKy);
-    const targetKyNum = parseInt(kyso);
-    const diff = currentKyNum - targetKyNum;
+    // Lotto535: 2 kỳ/ngày
+    // Tính ngày từ diff: mỗi 2 kỳ = 1 ngày
+    // Kỳ chẵn (00622, 00624...) = kỳ 21h
+    // Kỳ lẻ (00621, 00623...) = kỳ 13h
 
-    if (diff <= 0) return VL_URLS[product];
+    // currentKy là kỳ mới nhất đã quay hôm nay
+    // Tính số ngày lùi:
+    const daysBack = Math.ceil(diff / 2);
 
-    // Tính ngày của kỳ target
-    // Mỗi 2 kỳ = 1 ngày
-    const daysBack = Math.floor(diff / 2);
-    const remainder = diff % 2; // 0 = kỳ 21h, 1 = kỳ 13h
+    let current = new Date(parseInt(yyyy), parseInt(mm)-1, parseInt(dd));
+    current.setDate(current.getDate() - daysBack + 1);
 
-    const [dd, mm, yyyy] = info.currentDate.split('/');
-    let current = new Date(parseInt(yyyy), parseInt(mm) - 1, parseInt(dd));
-
-    // Lùi về số ngày tương ứng
-    current.setDate(current.getDate() - daysBack);
-
-    // Nếu remainder = 1: kỳ target ở ngày trước đó (kỳ 21h)
-    if (remainder === 1) {
-      current.setDate(current.getDate() - 1);
-    }
+    // Nếu target là kỳ lẻ (13h) trong ngày đó → dùng ngày đó
+    // Nếu target là kỳ chẵn (21h) → cũng dùng ngày đó
+    // Cả 2 kỳ trong 1 ngày đều nằm trong cùng 1 URL
 
     const newDd = String(current.getDate()).padStart(2, '0');
     const newMm = String(current.getMonth() + 1).padStart(2, '0');
     const newYyyy = current.getFullYear();
     const dateStr = newDd + '-' + newMm + '-' + newYyyy;
     const url = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dateStr + '.html';
-    console.log('[lotto535] kyso=' + kyso + ' currentKy=' + info.currentKy + ' diff=' + diff + ' daysBack=' + daysBack + ' remainder=' + remainder + ' → ' + url);
+    console.log('[lotto535] target=' + kyso + ' current=' + info.currentKy + '/' + info.currentDate + ' diff=' + diff + ' daysBack=' + daysBack + ' url=' + url);
     return url;
   }
 
-  const currentKyNum = parseInt(info.currentKy);
-  const targetKyNum = parseInt(kyso);
-  const diff = currentKyNum - targetKyNum;
-  if (diff <= 0) return VL_URLS[product]; // kỳ hiện tại
-
-  const [dd, mm, yyyy] = info.currentDate.split('/');
-  let url = '';
-  const drawDays = DRAW_DAYS[product] || [0,1,2,3,4,5,6];
+  // Các sản phẩm khác giữ nguyên logic cũ
   let current = new Date(parseInt(yyyy), parseInt(mm)-1, parseInt(dd));
   let count = 0;
   while (count < diff) {
@@ -231,9 +223,7 @@ async function getUrlFromKySo(product, kyso) {
   const newMm = String(current.getMonth() + 1).padStart(2, '0');
   const newYyyy = current.getFullYear();
   const dateStr = newDd + '-' + newMm + '-' + newYyyy;
-  url = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dateStr + '.html';
-  console.log('[getUrlFromKySo] ' + product + ' kyso=' + kyso + ' diff=' + diff + ' → ' + url);
-  return url;
+  return 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dateStr + '.html';
 }
 
 async function fetchHTML(url) {
