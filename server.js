@@ -119,32 +119,20 @@ async function getCurrentInfo(product) {
     let currentDate = '';
 
     if (product === 'max3d' || product === 'max3dpro') {
-      // Max3D/Max3DPro: trang theo ngày có thể "chưa mở thưởng" trước 18h,
-      // nhưng vẫn chứa các kỳ trước. Ta lấy kỳ lớn nhất có trong trang.
-      const extractLatestFromHtml = ($, fallbackDate) => {
-        const candidates = [];
-        $('div.title_tt, div.kyve, div.kythuong').each((_, el) => {
-          const text = $(el).text() || '';
-          const kyMatch = text.match(/#(\d+)/);
-          if (!kyMatch) return;
-          const kyNum = parseInt(kyMatch[1], 10);
-          if (Number.isNaN(kyNum)) return;
-          const dateMatch = text.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-          candidates.push({
-            ky: kyMatch[1],
-            kyNum,
-            date: dateMatch ? dateMatch[0] : fallbackDate,
-          });
-        });
-        if (candidates.length === 0) return null;
-        candidates.sort((a, b) => b.kyNum - a.kyNum);
-        return candidates[0];
-      };
+      const drawDays = new Set(DRAW_DAYS[product] || []);
+      const now = new Date();
+      const beforeCutoff = now.getHours() < 18 || (now.getHours() === 18 && now.getMinutes() < 30);
+      const startDate = new Date(now);
+      // Trước 18:30 của ngày quay thì dùng kỳ trước đó.
+      if (beforeCutoff && drawDays.has(startDate.getDay())) {
+        startDate.setDate(startDate.getDate() - 1);
+      }
 
-      // thử từ hôm nay lùi tối đa 14 ngày (đủ nhiều cho các ngày không quay)
+      // thử từ startDate lùi tối đa 14 ngày quay gần nhất.
       for (let offset = 0; offset < 14; offset++) {
-        const day = new Date();
-        day.setDate(day.getDate() - offset);
+        const day = new Date(startDate);
+        day.setDate(startDate.getDate() - offset);
+        if (!drawDays.has(day.getDay())) continue;
         const dd = String(day.getDate()).padStart(2, '0');
         const mm = String(day.getMonth() + 1).padStart(2, '0');
         const yyyy = day.getFullYear();
@@ -152,18 +140,11 @@ async function getCurrentInfo(product) {
         const todayUrl = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dd + '-' + mm + '-' + yyyy + '.html';
 
         try {
-          const { data: html } = await axios.get(todayUrl, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-              'Accept-Language': 'vi-VN,vi;q=0.9',
-            },
-            timeout: 20000,
-          });
-          const $ = cheerio.load(html);
-          const latest = extractLatestFromHtml($, fallbackDate);
-          if (latest) {
-            currentKy = latest.ky;
-            currentDate = latest.date || fallbackDate;
+          // Chỉ chấp nhận kỳ có dữ liệu sets thật, tránh dính kỳ "chưa quay".
+          const parsed = await scrapeWithAxios(todayUrl, product);
+          if (parsed && Array.isArray(parsed.sets) && parsed.sets.length > 0) {
+            currentKy = parsed.kySo || '';
+            currentDate = parsed.drawDate || fallbackDate;
           }
           if (currentKy && currentDate) break;
         } catch (_e) {
@@ -316,7 +297,12 @@ async function findDateUrlByKySo(product, kyso, lookbackDays = 90) {
         timeout: 3500,
       });
       if (targetRegex.test(String(html || ''))) {
-        return url;
+        // Xác thực lại bằng parser để tránh false positive từ danh sách/link liên quan.
+        const parsed = await scrapeWithAxios(url, product, String(kyso));
+        const parsedKy = String(parsed?.kySo || '').replace(/^0+/, '');
+        if (parsed && parsedKy === normalizedKy) {
+          return url;
+        }
       }
     } catch (_e) {
       // bỏ qua ngày lỗi, thử ngày tiếp theo
@@ -328,7 +314,26 @@ async function findDateUrlByKySo(product, kyso, lookbackDays = 90) {
 // Tính URL từ kyso
 async function getUrlFromKySo(product, kyso) {
   if ((product === 'max3d' || product === 'max3dpro' || product === 'mega' || product === 'power') && kyso) {
-    const directUrl = await findDateUrlByKySo(product, kyso, 70);
+    const info = await getCurrentInfo(product);
+    const currentKyNum = parseInt(info?.currentKy, 10);
+    const targetKyNum = parseInt(kyso, 10);
+
+    // Fail-fast cho kỳ tương lai hoặc kỳ sai product (vd: lấy kỳ max3d cho max3dpro).
+    if (!Number.isNaN(currentKyNum) && !Number.isNaN(targetKyNum) && targetKyNum > currentKyNum) {
+      throw new Error(
+        'Kỳ ' + kyso + ' vượt kỳ hiện tại #' + String(info.currentKy).padStart(5, '0') + ' của ' + product
+      );
+    }
+
+    let lookbackDays = 70;
+    if (!Number.isNaN(currentKyNum) && !Number.isNaN(targetKyNum) && targetKyNum > 0) {
+      const diff = Math.max(0, currentKyNum - targetKyNum);
+      // 3 kỳ/tuần -> ~2.33 ngày/kỳ. + buffer để tránh lệch lịch/quay bù.
+      const estimatedDays = Math.ceil(diff * 2.5) + 10;
+      lookbackDays = Math.min(120, Math.max(14, estimatedDays));
+    }
+
+    const directUrl = await findDateUrlByKySo(product, kyso, lookbackDays);
     if (directUrl) {
       console.log('[getUrlFromKySo direct] ' + product + ' kyso=' + kyso + ' → ' + directUrl);
       return directUrl;
@@ -532,12 +537,13 @@ async function scrapeWithAxios(url, product, kysoTarget) {
 
       if (drawsFromBlocks.length > 0) {
         const target = kysoTarget
-          ? (drawsFromBlocks.find((d) => d.ky === String(kysoTarget).replace(/^0+/, '') || d.ky === String(kysoTarget)) || drawsFromBlocks[0])
+          ? drawsFromBlocks.find((d) => d.ky === String(kysoTarget).replace(/^0+/, '') || d.ky === String(kysoTarget))
           : drawsFromBlocks[0];
+        if (!target) return null;
         const urlDate = (url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/) || []).slice(1).join('/');
         return {
           sets: target.sets,
-          kySo: kysoTarget || target.ky || '',
+          kySo: target.ky || '',
           drawDate: target.drawDate || urlDate || new Date().toLocaleDateString('vi-VN'),
         };
       }
@@ -630,11 +636,17 @@ async function scrapeWithAxios(url, product, kysoTarget) {
             else if (labelText.includes('giải ba')) push('Giải ba', 8);
           });
           if (sets.length > 0) {
+            const kyInChunk = (chunk.match(/Kỳ vé\s*#(\d+)/i) || [])[1] || '';
+            const normalizedTarget = String(kysoTarget || '').replace(/^0+/, '');
+            const normalizedChunkKy = String(kyInChunk || '').replace(/^0+/, '');
+            if (kysoTarget && (!normalizedChunkKy || normalizedChunkKy !== normalizedTarget)) {
+              return null;
+            }
             const dateMatch = chunk.match(/(\d{2})\/(\d{2})\/(\d{4})/);
             const urlDate = (url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/) || []).slice(1).join('/');
             return {
               sets,
-              kySo: kysoTarget || '',
+              kySo: kyInChunk || '',
               drawDate: (dateMatch ? dateMatch[0] : '') || urlDate || new Date().toLocaleDateString('vi-VN'),
             };
           }
@@ -644,11 +656,12 @@ async function scrapeWithAxios(url, product, kysoTarget) {
       const targetDraw = kysoTarget
         ? parsedDraws.find((d) => d.ky === String(kysoTarget).replace(/^0+/, '') || d.ky === String(kysoTarget))
         : parsedDraws[0];
-      const chosen = targetDraw || parsedDraws[0];
+      const chosen = targetDraw || (!kysoTarget ? parsedDraws[0] : null);
+      if (!chosen) return null;
       const urlDate = (url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/) || []).slice(1).join('/');
       return {
         sets: chosen.sets,
-        kySo: kysoTarget || chosen.ky || '',
+        kySo: chosen.ky || '',
         drawDate: chosen.drawDate || urlDate || new Date().toLocaleDateString('vi-VN'),
       };
     }
@@ -869,8 +882,8 @@ async function scrapeVietlott(product, kyso) {
   let url = '';
   if (kyso) {
     url = await getUrlFromKySo(product, kyso);
-  } else if (product === 'mega' || product === 'power') {
-    // Luôn ưu tiên trang theo ngày kỳ đã mở thay vì trang trực tiếp.
+  } else if (product === 'mega' || product === 'power' || product === 'max3d' || product === 'max3dpro') {
+    // Ưu tiên trang theo ngày kỳ đã mở thay vì trang trực tiếp.
     const info = await getCurrentInfo(product);
     if (info?.currentDate) {
       const [dd, mm, yyyy] = info.currentDate.split('/');
