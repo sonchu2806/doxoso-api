@@ -348,7 +348,7 @@ async function scrapeWithAxios(url, product, kysoTarget) {
 
     return { numbers: uniqueNums, powerNumber, kySo, drawDate };
   } catch(e) {
-    console.log('[scrapeWithAxios] failed:', e.message);
+    console.log('[scrapeWithAxios] failed:', e.message, e.stack?.slice(0,200));
     return null;
   }
 }
