@@ -324,6 +324,19 @@ async function getUrlFromKySo(product, kyso) {
         'Kỳ ' + kyso + ' vượt kỳ hiện tại #' + String(info.currentKy).padStart(5, '0') + ' của ' + product
       );
     }
+    if (
+      (product === 'max3d' || product === 'max3dpro') &&
+      !Number.isNaN(currentKyNum) &&
+      !Number.isNaN(targetKyNum)
+    ) {
+      const diff = currentKyNum - targetKyNum;
+      // 3D/3DPro chỉ scan lookback ngắn; chặn sớm kỳ quá cũ để tránh timeout.
+      if (diff > 90) {
+        throw new Error(
+          'Kỳ ' + kyso + ' quá cũ cho tra cứu nhanh của ' + product + ' (current #' + String(info.currentKy).padStart(5, '0') + ')'
+        );
+      }
+    }
 
     let lookbackDays = 70;
     if (!Number.isNaN(currentKyNum) && !Number.isNaN(targetKyNum) && targetKyNum > 0) {
