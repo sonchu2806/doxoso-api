@@ -950,6 +950,36 @@ app.get('/test-connection', async (req, res) => {
   res.json(results);
 });
 
+app.get('/debug-lotto535', async (req, res) => {
+  try {
+    const url = 'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-lotto-535.html';
+    const { data: html } = await axios.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      timeout: 15000,
+    });
+    const $ = cheerio.load(html);
+
+    const titleTts = [];
+    $('div.title_tt').each((_, el) => {
+      titleTts.push($(el).text().trim().slice(0, 60));
+    });
+
+    const ballLotto = [];
+    $('span.ball_lotto').each((_, el) => {
+      ballLotto.push({ text: $(el).text().trim(), cls: $(el).attr('class') });
+    });
+
+    res.json({
+      htmlLen: html.length,
+      titleTts,
+      ballLottoCount: ballLotto.length,
+      ballLotto: ballLotto.slice(0, 10),
+    });
+  } catch(e) {
+    res.json({ error: e.message });
+  }
+});
+
 app.get('/xskt/all', async (req, res) => {
   const { date, region } = req.query;
   try {
