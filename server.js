@@ -46,7 +46,7 @@ const DRAW_DAYS = {
   power:    [2, 4, 6],
   max3d:    [1, 3, 5],
   max3dpro: [1, 3, 5],
-  lotto535: [0,1,2,3,4,5,6],
+  lotto535: [0,1,2,3,4,5,6], // Mỗi ngày 2 kỳ
   keno:     [0,1,2,3,4,5,6],
 };
 
@@ -170,8 +170,27 @@ async function getUrlFromKySo(product, kyso) {
 
   if (diff <= 0) return VL_URLS[product]; // kỳ hiện tại
 
-  const drawDays = DRAW_DAYS[product] || [0,1,2,3,4,5,6];
   const [dd, mm, yyyy] = info.currentDate.split('/');
+  let url = '';
+
+  if (product === 'lotto535') {
+    // Mỗi ngày 2 kỳ → diff kỳ / 2 = số ngày lùi
+    const daysBack = Math.floor(diff / 2);
+    const remainder = diff % 2; // 0 = kỳ 21h, 1 = kỳ 13h
+
+    let current = new Date(parseInt(yyyy), parseInt(mm) - 1, parseInt(dd));
+    current.setDate(current.getDate() - daysBack);
+
+    const newDd = String(current.getDate()).padStart(2, '0');
+    const newMm = String(current.getMonth() + 1).padStart(2, '0');
+    const newYyyy = current.getFullYear();
+    const dateStr = newDd + '-' + newMm + '-' + newYyyy;
+    url = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dateStr + '.html';
+    console.log('[lotto535] kyso=' + kyso + ' diff=' + diff + ' daysBack=' + daysBack + ' remainder=' + remainder + ' → ' + url);
+    return url;
+  }
+
+  const drawDays = DRAW_DAYS[product] || [0,1,2,3,4,5,6];
   let current = new Date(parseInt(yyyy), parseInt(mm)-1, parseInt(dd));
   let count = 0;
   while (count < diff) {
@@ -182,7 +201,7 @@ async function getUrlFromKySo(product, kyso) {
   const newMm = String(current.getMonth() + 1).padStart(2, '0');
   const newYyyy = current.getFullYear();
   const dateStr = newDd + '-' + newMm + '-' + newYyyy;
-  const url = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dateStr + '.html';
+  url = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dateStr + '.html';
   console.log('[getUrlFromKySo] ' + product + ' kyso=' + kyso + ' diff=' + diff + ' → ' + url);
   return url;
 }
@@ -203,7 +222,7 @@ async function fetchHTML(url) {
   }
 }
 
-async function scrapeWithAxios(url, product) {
+async function scrapeWithAxios(url, product, kysoTarget) {
   try {
     const { data: html } = await axios.get(url, {
       headers: {
@@ -238,6 +257,26 @@ async function scrapeWithAxios(url, product) {
       return { sets: setsArr, kySo, drawDate };
     }
 
+    // Với lotto535, nếu có kysoTarget thì cố gắng parse đúng section kỳ đó
+    let scope = $;
+    let matchedTitleText = '';
+    if (product === 'lotto535' && kysoTarget) {
+      let targetSection = null;
+      $('div.title_tt').each((_, el) => {
+        const text = $(el).text();
+        if (text.includes('#' + kysoTarget) && !targetSection) {
+          const section = $(el).closest('.box_kqxsdt, .bangketqua, div[class*="ketqua"]');
+          if (section && section.length) {
+            targetSection = section;
+            matchedTitleText = text;
+          }
+        }
+      });
+      if (targetSection && targetSection.length) {
+        scope = targetSection;
+      }
+    }
+
     const selectorMap = {
       mega: 'span.ball_orange, span.ball.ball_orange',
       power: 'span.ball_power, span.ball.ball_power',
@@ -246,14 +285,14 @@ async function scrapeWithAxios(url, product) {
     };
 
     const numbers = [];
-    $(selectorMap[product] || 'span[class*="ball"]').each((_, el) => {
+    scope.find(selectorMap[product] || 'span[class*="ball"]').each((_, el) => {
       const n = parseInt($(el).text().trim());
       if (!isNaN(n) && n >= 1) numbers.push(n);
     });
 
     let powerNumber = null;
     if (product === 'lotto535') {
-      const powerEl = $('span.ball_lotto.ball_power2, span.ball.ball_lotto.ball_power2').first();
+      const powerEl = scope.find('span.ball_lotto.ball_power2, span.ball.ball_lotto.ball_power2').first();
       if (powerEl.length) powerNumber = parseInt(powerEl.text().trim());
     }
     if (product === 'power') {
@@ -266,10 +305,11 @@ async function scrapeWithAxios(url, product) {
     if (uniqueNums.length === 0) return null;
 
     // Parse kySo và drawDate từ div.title_tt (ưu tiên đúng container kết quả)
-    const boxKqxsdt = $('div.box_kqxsdt div.title_tt, div#noidung div.title_tt');
-    const titleEl = boxKqxsdt.length ? boxKqxsdt.first() : $('div.title_tt').first();
+    const boxKqxsdt = scope.find('div.box_kqxsdt div.title_tt, div#noidung div.title_tt');
+    const titleEl = boxKqxsdt.length ? boxKqxsdt.first() : scope.find('div.title_tt').first();
     const titleText = titleEl.text();
     const kySo =
+      matchedTitleText.match(/#(\d+)/)?.[1] ||
       titleText.match(/#(\d+)/)?.[1] ||
       $('span.period_live').first().text().replace(/[^0-9]/g, '') ||
       '';
@@ -370,7 +410,7 @@ async function scrapeVietlott(product, kyso) {
   if (!url) throw new Error('Unknown product: ' + product);
 
   // Thử axios trước
-  const axiosResult = await scrapeWithAxios(url, product);
+  const axiosResult = await scrapeWithAxios(url, product, kyso);
   if (axiosResult) {
     console.log('[' + product + '] axios success');
     setCache(cacheKey, axiosResult);
