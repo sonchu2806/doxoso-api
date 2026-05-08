@@ -260,55 +260,36 @@ async function scrapeWithAxios(url, product, kysoTarget) {
       };
     }
 
-    // LOTTO535 — có 2 kỳ/ngày
+    // LOTTO535
     if (product === 'lotto535') {
-      const results = [];
-      $('div.title_tt').each((_, titleEl) => {
-        const titleText = $(titleEl).text();
-        const kyMatch = titleText.match(/#(\d+)/);
-        if (!kyMatch) return;
-        const ky = kyMatch[1];
+      // Trang trực tiếp lotto535 không có div.title_tt
+      // Lấy kySo từ span.period_live hoặc div.kyve hoặc div.kythuong
+      const kySoEl = $('span.period_live, div.kyve, div.kythuong').first();
+      const kySoText = kySoEl.text();
+      const kySo = kySoText.match(/#(\d+)/)?.[1] || '';
+      const drawDate = kySoText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] ||
+                       new Date().toLocaleDateString('vi-VN');
 
-        // Tìm span.ball_lotto gần nhất sau title này
-        const allBalls = [];
-        let powerNum = null;
-
-        // Lấy parent của title rồi tìm ball trong đó
-        const parent = $(titleEl).parent();
-        parent.find('span.ball_lotto').each((_, el) => {
-          const cls = $(el).attr('class') || '';
-          const n = parseInt($(el).text().trim());
-          if (isNaN(n)) return;
-          if (cls.includes('ball_power2')) {
-            powerNum = n;
-          } else {
-            allBalls.push(n);
-          }
-        });
-
-        if (allBalls.length > 0) {
-          results.push({
-            ky,
-            numbers: allBalls.slice(0, 5),
-            powerNumber: powerNum,
-            drawDate: titleText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '',
-          });
+      // Parse numbers từ toàn trang (trang trực tiếp chỉ có 1 kỳ)
+      const numbers = [];
+      let powerNumber = null;
+      $('span.ball_lotto').each((_, el) => {
+        const cls = $(el).attr('class') || '';
+        const n = parseInt($(el).text().trim());
+        if (isNaN(n)) return;
+        if (cls.includes('ball_power2')) {
+          powerNumber = n;
+        } else {
+          numbers.push(n);
         }
       });
 
-      if (results.length === 0) return null;
-
-      // Nếu có kysoTarget thì tìm đúng kỳ
-      const target = kysoTarget
-        ? results.find(r => r.ky === kysoTarget)
-        : results[0];
-
-      if (!target) return null;
+      if (numbers.length === 0) return null;
       return {
-        numbers: target.numbers,
-        powerNumber: target.powerNumber,
-        kySo: target.ky,
-        drawDate: target.drawDate,
+        numbers: numbers.slice(0, 5),
+        powerNumber,
+        kySo,
+        drawDate,
       };
     }
 
