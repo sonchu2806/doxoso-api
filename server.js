@@ -22,6 +22,18 @@ function getCache(key) {
 function setCache(key, data) {
   cache[key] = { data, timestamp: Date.now() };
 }
+function toViDate(d) {
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return dd + '/' + mm + '/' + yyyy;
+}
+function toSlugDate(d) {
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return dd + '-' + mm + '-' + yyyy;
+}
 
 const VL_URLS = {
   mega:     'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-mega-6-45.html',
@@ -158,6 +170,48 @@ async function getCurrentInfo(product) {
           // tiếp tục thử ngày trước đó
         }
       }
+    } else if (product === 'mega' || product === 'power') {
+      // Mega/Power: dùng trang theo ngày để tránh sai kỳ trước giờ quay (18:30).
+      const drawDays = new Set(DRAW_DAYS[product] || []);
+      const now = new Date();
+      const beforeCutoff = now.getHours() < 18 || (now.getHours() === 18 && now.getMinutes() < 30);
+      const startDate = new Date(now);
+      if (beforeCutoff && drawDays.has(startDate.getDay())) {
+        startDate.setDate(startDate.getDate() - 1);
+      }
+
+      for (let offset = 0; offset < 21; offset++) {
+        const day = new Date(startDate);
+        day.setDate(startDate.getDate() - offset);
+        if (!drawDays.has(day.getDay())) continue;
+        const daySlug = toSlugDate(day);
+        const dayVi = toViDate(day);
+        const dayUrl = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + daySlug + '.html';
+
+        try {
+          const { data: html } = await axios.get(dayUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Accept-Language': 'vi-VN,vi;q=0.9',
+            },
+            timeout: 20000,
+          });
+          const $ = cheerio.load(html);
+          const sourceText =
+            $('div.title_tt').first().text() ||
+            $('div.kyve').first().text() ||
+            $('div.kythuong').first().text() ||
+            $('span.period_live').first().text() ||
+            '';
+          const kyMatch = sourceText.match(/#(\d+)/);
+          const dateMatch = sourceText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+          if (kyMatch) currentKy = kyMatch[1];
+          currentDate = dateMatch ? dateMatch[0] : dayVi;
+          if (currentKy) break;
+        } catch (_e) {
+          // thử ngày quay trước đó
+        }
+      }
     } else {
       const url = VL_URLS[product];
       if (!url) return { currentKy: '', currentDate: '' };
@@ -236,7 +290,7 @@ async function getCurrentInfo(product) {
   }
 }
 
-async function findDateUrlByKySo(product, kyso, lookbackDays = 260) {
+async function findDateUrlByKySo(product, kyso, lookbackDays = 90) {
   const baseSlug = BASE_URL_MAP[product];
   if (!baseSlug || !kyso) return null;
   const drawDays = new Set(DRAW_DAYS[product] || [0, 1, 2, 3, 4, 5, 6]);
@@ -259,7 +313,7 @@ async function findDateUrlByKySo(product, kyso, lookbackDays = 260) {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           'Accept-Language': 'vi-VN,vi;q=0.9',
         },
-        timeout: 12000,
+        timeout: 3500,
       });
       if (targetRegex.test(String(html || ''))) {
         return url;
@@ -273,11 +327,14 @@ async function findDateUrlByKySo(product, kyso, lookbackDays = 260) {
 
 // Tính URL từ kyso
 async function getUrlFromKySo(product, kyso) {
-  if ((product === 'max3d' || product === 'max3dpro') && kyso) {
-    const directUrl = await findDateUrlByKySo(product, kyso);
+  if ((product === 'max3d' || product === 'max3dpro' || product === 'mega' || product === 'power') && kyso) {
+    const directUrl = await findDateUrlByKySo(product, kyso, 70);
     if (directUrl) {
       console.log('[getUrlFromKySo direct] ' + product + ' kyso=' + kyso + ' → ' + directUrl);
       return directUrl;
+    }
+    if (product === 'max3d' || product === 'max3dpro') {
+      throw new Error('Không tìm thấy URL theo kỳ cho ' + product + ' kỳ ' + kyso);
     }
   }
 
@@ -363,35 +420,236 @@ async function scrapeWithAxios(url, product, kysoTarget) {
     // MAX 3D
     if (product === 'max3d' || product === 'max3dpro') {
       console.log('[max3d axios] span count:', $('span[id^="max3d_G"]').length);
-      if ($('span[id^="max3d_G"]').length === 0) return null;
-      const groups = {};
-      $('span[id^="max3d_G"]').each((_, el) => {
-        const match = el.attribs?.id?.match(/max3d_G(\d+)_(\d+)_(\d+)/);
-        if (!match) return;
-        const [, prize, set, pos] = match;
-        const key = 'G' + prize + '_' + set;
-        if (!groups[key]) groups[key] = { prize: 'G' + prize, set, nums: [] };
-        groups[key].nums[parseInt(pos) - 1] = parseInt($(el).text().trim());
+      const isProProduct = product === 'max3dpro';
+      const matchProductContext = (textRaw) => {
+        const t = String(textRaw || '').toLowerCase();
+        const hasPro = /max\s*3d\s*pro|max3d\s*pro|3d\s*pro/.test(t);
+        if (isProProduct) return hasPro;
+        return !hasPro;
+      };
+      const parse3dSetsFromTable = (tableRef) => {
+        const sets = [];
+        const pushTriples = (label, digits, expected) => {
+          const maxLen = Math.min(digits.length, expected * 3);
+          let setNo = 1;
+          for (let i = 0; i + 2 < maxLen; i += 3) {
+            sets.push({
+              label: label + ' bộ ' + setNo,
+              numbers: [digits[i], digits[i + 1], digits[i + 2]],
+            });
+            setNo++;
+          }
+        };
+        tableRef.find('tr').each((__, tr) => {
+          const tds = $(tr).find('td');
+          if (tds.length < 2) return;
+          const labelText = tds.eq(0).text().replace(/\s+/g, ' ').trim().toLowerCase();
+          const numText = tds.eq(1).text().replace(/\s+/g, ' ').trim();
+          const digits = numText.split(' ').map((x) => parseInt(x, 10)).filter((n) => !Number.isNaN(n) && n >= 0 && n <= 9);
+          if (digits.length < 3) return;
+          if (labelText.includes('đặc biệt')) pushTriples('Đặc biệt', digits, 2);
+          else if (labelText.includes('giải nhất')) pushTriples('Giải nhất', digits, 4);
+          else if (labelText.includes('giải nhì')) pushTriples('Giải nhì', digits, 6);
+          else if (labelText.includes('giải ba')) pushTriples('Giải ba', digits, 8);
+        });
+        return sets;
+      };
+
+      if ($('span[id^="max3d_G"]').length > 0) {
+        const groups = {};
+        $('span[id^="max3d_G"]').each((_, el) => {
+          const match = el.attribs?.id?.match(/max3d_G(\d+)_(\d+)_(\d+)/);
+          if (!match) return;
+          const [, prize, set, pos] = match;
+          const key = 'G' + prize + '_' + set;
+          if (!groups[key]) groups[key] = { prize: 'G' + prize, set, nums: [] };
+          groups[key].nums[parseInt(pos) - 1] = parseInt($(el).text().trim());
+        });
+        const setsArr = Object.entries(groups)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([, { prize, set, nums }]) => ({
+            label: (PRIZE_LABELS[prize] || prize) + ' bộ ' + set,
+            numbers: nums.filter(n => !isNaN(n)),
+          }));
+        if (setsArr.length === 0) return null;
+        const titleText = $('div.title_tt').first().text();
+        const kyveText = $('div.kyve').first().text();
+        const kythuongText = $('div.kythuong').first().text();
+        const periodText = $('span.period_live').first().text();
+        const sourceText = titleText || kyveText || kythuongText || periodText;
+        const urlDate = (url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/) || []).slice(1).join('/');
+        const kySoParsed = sourceText.match(/#(\d+)/)?.[1] || '';
+        const drawDateParsed = sourceText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '';
+        return {
+          sets: setsArr,
+          kySo: kySoParsed || (kysoTarget || ''),
+          drawDate: drawDateParsed || urlDate || new Date().toLocaleDateString('vi-VN'),
+        };
+      }
+
+      // Fallback ưu tiên cho trang lịch sử: parse từng block .boxLiveKQXS
+      const drawsFromBlocks = [];
+      $('.boxLiveKQXS').each((_, box) => {
+        const boxEl = $(box);
+        const boxCtx = boxEl.text().replace(/\s+/g, ' ').trim();
+        if (!matchProductContext(boxCtx)) return;
+        const kyText = boxEl.find('.kyve').first().text().replace(/\s+/g, ' ').trim();
+        const kyMatch = kyText.match(/#(\d+)/);
+        if (!kyMatch) return;
+        const drawDateMatch = kyText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        const sets = [];
+        const pushFromRow = (selector, labelPrefix) => {
+          boxEl.find(selector).find('div').each((idx, divEl) => {
+            const digits = $(divEl).find('span').map((__, sp) => parseInt($(sp).text().trim(), 10)).get()
+              .filter((n) => !Number.isNaN(n) && n >= 0 && n <= 9);
+            if (digits.length === 3) {
+              sets.push({ label: labelPrefix + ' bộ ' + (idx + 1), numbers: digits });
+            }
+          });
+        };
+        pushFromRow('td.max3d_number.max3d_g1', 'Đặc biệt');
+        pushFromRow('td.max3d_number.max3d_g2', 'Giải nhất');
+        pushFromRow('td.max3d_number.max3d_g3', 'Giải nhì');
+        // Có 2 hàng dùng class max3d_g2; hàng cuối là giải ba (nhiều bộ hơn)
+        const allG2Rows = boxEl.find('td.max3d_number.max3d_g2');
+        if (allG2Rows.length > 1) {
+          $(allG2Rows[allG2Rows.length - 1]).find('div').each((idx, divEl) => {
+            const digits = $(divEl).find('span').map((__, sp) => parseInt($(sp).text().trim(), 10)).get()
+              .filter((n) => !Number.isNaN(n) && n >= 0 && n <= 9);
+            if (digits.length === 3) {
+              sets.push({ label: 'Giải ba bộ ' + (idx + 1), numbers: digits });
+            }
+          });
+        }
+        if (sets.length > 0) {
+          drawsFromBlocks.push({
+            ky: kyMatch[1],
+            drawDate: drawDateMatch ? drawDateMatch[0] : '',
+            sets,
+          });
+        }
       });
-      const setsArr = Object.entries(groups)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([, { prize, set, nums }]) => ({
-          label: (PRIZE_LABELS[prize] || prize) + ' bộ ' + set,
-          numbers: nums.filter(n => !isNaN(n)),
-        }));
-      if (setsArr.length === 0) return null;
-      const titleText = $('div.title_tt').first().text();
-      const kyveText = $('div.kyve').first().text();
-      const kythuongText = $('div.kythuong').first().text();
-      const periodText = $('span.period_live').first().text();
-      const sourceText = titleText || kyveText || kythuongText || periodText;
+
+      if (drawsFromBlocks.length > 0) {
+        const target = kysoTarget
+          ? (drawsFromBlocks.find((d) => d.ky === String(kysoTarget).replace(/^0+/, '') || d.ky === String(kysoTarget)) || drawsFromBlocks[0])
+          : drawsFromBlocks[0];
+        const urlDate = (url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/) || []).slice(1).join('/');
+        return {
+          sets: target.sets,
+          kySo: kysoTarget || target.ky || '',
+          drawDate: target.drawDate || urlDate || new Date().toLocaleDateString('vi-VN'),
+        };
+      }
+
+      // Fallback cho trang theo ngày: parse bảng "Kỳ vé #xxxx"
+      const parsedDraws = [];
+      $('table').each((_, tbl) => {
+        const table = $(tbl);
+        const tableText = table.text().replace(/\s+/g, ' ').trim();
+        if (!/SỐ QUAY THƯỞNG/i.test(tableText) || !/MAX 3D/i.test(tableText)) return;
+        let prev = table.prev();
+        let ky = '';
+        let drawDate = '';
+        while (prev.length) {
+          const t = prev.text().replace(/\s+/g, ' ').trim();
+          const km = t.match(/Kỳ vé\s*#(\d+)/i);
+          if (km) {
+            ky = km[1];
+            const dm = t.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+            if (dm) drawDate = dm[0];
+            break;
+          }
+          prev = prev.prev();
+        }
+        if (!ky) return;
+
+        const sets = parse3dSetsFromTable(table);
+
+        if (sets.length > 0) {
+          parsedDraws.push({ ky, drawDate, sets });
+        }
+      });
+
+      // Fallback thêm: lấy ky/date từ text container gần table khi prev-sibling không có.
+      if (parsedDraws.length === 0) {
+        $('table').each((_, tbl) => {
+          const table = $(tbl);
+          const tableText = table.text().replace(/\s+/g, ' ').trim();
+          if (!/SỐ QUAY THƯỞNG/i.test(tableText) || !/MAX 3D/i.test(tableText)) return;
+          if (!matchProductContext(table.parent().text())) return;
+          const ctxText = (table.parent().text() || '').replace(/\s+/g, ' ');
+          const kyMatch = ctxText.match(/Kỳ vé\s*#(\d+)/i);
+          if (!kyMatch) return;
+          const dateMatch = ctxText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+          const sets = parse3dSetsFromTable(table);
+          if (sets.length > 0) {
+            parsedDraws.push({
+              ky: kyMatch[1],
+              drawDate: dateMatch ? dateMatch[0] : '',
+              sets,
+            });
+          }
+        });
+      }
+
+      // Fallback cuối: tìm block quanh #kyso rồi parse table gần đó
+      if (parsedDraws.length === 0) {
+        const targetMark = kysoTarget ? ('#' + String(kysoTarget).replace(/^0+/, '')) : '';
+        const htmlNorm = String(html || '').replace(/#0+/g, '#');
+        const idx = targetMark ? htmlNorm.indexOf(targetMark) : -1;
+        if (idx >= 0) {
+          const start = Math.max(0, idx - 4000);
+          const chunk = htmlNorm.slice(start, idx + 60000);
+          const $$ = cheerio.load(chunk);
+          const table = $$('table')
+            .filter((__, t) => {
+              const tx = $$(t).text().replace(/\s+/g, ' ').trim().toLowerCase();
+              return tx.includes('so quay thuong') && (tx.includes('max 3d') || tx.includes('max3d'));
+            })
+            .first();
+          const sets = [];
+          table.find('tr').each((__, tr) => {
+            const tds = $$(tr).find('td');
+            if (tds.length < 2) return;
+            const labelText = tds.eq(0).text().replace(/\s+/g, ' ').trim().toLowerCase();
+            const numText = tds.eq(1).text().replace(/\s+/g, ' ').trim();
+            const digits = numText.split(' ').map((x) => parseInt(x, 10)).filter((n) => !Number.isNaN(n) && n >= 0 && n <= 9);
+            if (digits.length < 3) return;
+            const push = (label, expected) => {
+              const maxLen = Math.min(digits.length, expected * 3);
+              let setNo = 1;
+              for (let i = 0; i + 2 < maxLen; i += 3) {
+                sets.push({ label: label + ' bộ ' + setNo, numbers: [digits[i], digits[i + 1], digits[i + 2]] });
+                setNo++;
+              }
+            };
+            if (labelText.includes('đặc biệt')) push('Đặc biệt', 2);
+            else if (labelText.includes('giải nhất')) push('Giải nhất', 4);
+            else if (labelText.includes('giải nhì')) push('Giải nhì', 6);
+            else if (labelText.includes('giải ba')) push('Giải ba', 8);
+          });
+          if (sets.length > 0) {
+            const dateMatch = chunk.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+            const urlDate = (url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/) || []).slice(1).join('/');
+            return {
+              sets,
+              kySo: kysoTarget || '',
+              drawDate: (dateMatch ? dateMatch[0] : '') || urlDate || new Date().toLocaleDateString('vi-VN'),
+            };
+          }
+        }
+        return null;
+      }
+      const targetDraw = kysoTarget
+        ? parsedDraws.find((d) => d.ky === String(kysoTarget).replace(/^0+/, '') || d.ky === String(kysoTarget))
+        : parsedDraws[0];
+      const chosen = targetDraw || parsedDraws[0];
       const urlDate = (url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/) || []).slice(1).join('/');
-      const kySoParsed = sourceText.match(/#(\d+)/)?.[1] || '';
-      const drawDateParsed = sourceText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '';
       return {
-        sets: setsArr,
-        kySo: kySoParsed || (kysoTarget || ''),
-        drawDate: drawDateParsed || urlDate || new Date().toLocaleDateString('vi-VN'),
+        sets: chosen.sets,
+        kySo: kysoTarget || chosen.ky || '',
+        drawDate: chosen.drawDate || urlDate || new Date().toLocaleDateString('vi-VN'),
       };
     }
 
@@ -608,7 +866,21 @@ async function scrapeVietlott(product, kyso) {
   const cached = getCache(cacheKey);
   if (cached) return cached;
 
-  const url = kyso ? await getUrlFromKySo(product, kyso) : VL_URLS[product];
+  let url = '';
+  if (kyso) {
+    url = await getUrlFromKySo(product, kyso);
+  } else if (product === 'mega' || product === 'power') {
+    // Luôn ưu tiên trang theo ngày kỳ đã mở thay vì trang trực tiếp.
+    const info = await getCurrentInfo(product);
+    if (info?.currentDate) {
+      const [dd, mm, yyyy] = info.currentDate.split('/');
+      url = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dd + '-' + mm + '-' + yyyy + '.html';
+    } else {
+      url = VL_URLS[product];
+    }
+  } else {
+    url = VL_URLS[product];
+  }
   if (!url) throw new Error('Unknown product: ' + product);
 
   // Thử axios trước
@@ -624,6 +896,12 @@ async function scrapeVietlott(product, kyso) {
     console.log('[' + product + '] axios success');
     setCache(cacheKey, axiosResult);
     return axiosResult;
+  }
+  if (product === 'mega') {
+    throw new Error('Không parse được dữ liệu Mega từ HTML theo ngày');
+  }
+  if ((product === 'max3d' || product === 'max3dpro') && kyso) {
+    throw new Error('Không parse được dữ liệu 3D từ trang theo ngày cho kỳ ' + kyso);
   }
   console.log('[' + product + '] axios failed, trying puppeteer');
 
