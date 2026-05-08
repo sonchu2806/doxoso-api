@@ -256,20 +256,25 @@ async function scrapeWithAxios(url, product) {
       const powerEl = $('span.ball_lotto.ball_power2, span.ball.ball_lotto.ball_power2').first();
       if (powerEl.length) powerNumber = parseInt(powerEl.text().trim());
     }
+    if (product === 'power') {
+      const powerEl = $('span.ball_power2, span.ball.ball_power2').first();
+      if (powerEl.length) powerNumber = parseInt(powerEl.text().trim());
+    }
 
     const maxMap = { keno: 20, lotto535: 5, mega: 6, power: 6 };
     const uniqueNums = [...new Set(numbers)].slice(0, maxMap[product] || 6);
     if (uniqueNums.length === 0) return null;
 
-    // Parse kySo và drawDate từ div.title_tt
-    const titleTt = $('div.title_tt').first().text();
+    // Parse kySo và drawDate từ div.title_tt (ưu tiên đúng container kết quả)
+    const boxKqxsdt = $('div.box_kqxsdt div.title_tt, div#noidung div.title_tt');
+    const titleEl = boxKqxsdt.length ? boxKqxsdt.first() : $('div.title_tt').first();
+    const titleText = titleEl.text();
     const kySo =
-      titleTt.match(/#(\d+)/)?.[1] ||
+      titleText.match(/#(\d+)/)?.[1] ||
       $('span.period_live').first().text().replace(/[^0-9]/g, '') ||
       '';
     const drawDate =
-      titleTt.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] ||
-      $('div.kythuong, div.kyve').first().text().match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] ||
+      titleText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] ||
       '';
 
     return { numbers: uniqueNums, powerNumber, kySo, drawDate };
