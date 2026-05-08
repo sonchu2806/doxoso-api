@@ -126,10 +126,15 @@ async function getCurrentInfo(product) {
           });
           const $ = cheerio.load(html);
           const titleText = $('div.title_tt').first().text();
-          const kyMatch = titleText.match(/#(\d+)/);
-          const dateMatch = titleText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+          const kyveText = $('div.kyve').first().text();
+          const kythuongText = $('div.kythuong').first().text();
+          const periodText = $('span.period_live').first().text();
+          const sourceText = titleText || kyveText || kythuongText || periodText;
+          const kyMatch = sourceText.match(/#(\d+)/);
+          const dateMatch = sourceText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
           if (kyMatch) currentKy = kyMatch[1];
           if (dateMatch) currentDate = dateMatch[0];
+          if (!currentDate) currentDate = dd + '/' + mm + '/' + yyyy;
           if (currentKy && currentDate) break;
         } catch (_e) {
           // tiếp tục thử ngày trước đó
@@ -315,10 +320,17 @@ async function scrapeWithAxios(url, product, kysoTarget) {
         }));
       if (setsArr.length === 0) return null;
       const titleText = $('div.title_tt').first().text();
+      const kyveText = $('div.kyve').first().text();
+      const kythuongText = $('div.kythuong').first().text();
+      const periodText = $('span.period_live').first().text();
+      const sourceText = titleText || kyveText || kythuongText || periodText;
+      const urlDate = (url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/) || []).slice(1).join('/');
+      const kySoParsed = sourceText.match(/#(\d+)/)?.[1] || '';
+      const drawDateParsed = sourceText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '';
       return {
         sets: setsArr,
-        kySo: titleText.match(/#(\d+)/)?.[1] || '',
-        drawDate: titleText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '',
+        kySo: kySoParsed || (kysoTarget || ''),
+        drawDate: drawDateParsed || urlDate || new Date().toLocaleDateString('vi-VN'),
       };
     }
 
@@ -541,6 +553,13 @@ async function scrapeVietlott(product, kyso) {
   // Thử axios trước
   const axiosResult = await scrapeWithAxios(url, product, kyso);
   if (axiosResult) {
+    if ((product === 'max3d' || product === 'max3dpro') && kyso && !axiosResult.kySo) {
+      axiosResult.kySo = kyso;
+    }
+    if ((product === 'max3d' || product === 'max3dpro') && !axiosResult.drawDate) {
+      const m = url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/);
+      if (m) axiosResult.drawDate = m[1] + '/' + m[2] + '/' + m[3];
+    }
     console.log('[' + product + '] axios success');
     setCache(cacheKey, axiosResult);
     return axiosResult;
@@ -600,6 +619,11 @@ async function scrapeVietlott(product, kyso) {
       });
 
       const result = { sets, drawDate: drawDate3d, kySo: kySo3d };
+      if (kyso && !result.kySo) result.kySo = kyso;
+      if (!result.drawDate) {
+        const m = url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/);
+        if (m) result.drawDate = m[1] + '/' + m[2] + '/' + m[3];
+      }
       setCache(cacheKey, result);
       return result;
     }
