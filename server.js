@@ -234,83 +234,99 @@ async function scrapeWithAxios(url, product, kysoTarget) {
 
     const $ = cheerio.load(html);
 
+    // MAX 3D
     if (product === 'max3d' || product === 'max3dpro') {
-      const sets = {};
+      const groups = {};
       $('span[id^="max3d_G"]').each((_, el) => {
-        const match = el.attribs.id.match(/max3d_G(\d+)_(\d+)_(\d+)/);
+        const match = el.attribs?.id?.match(/max3d_G(\d+)_(\d+)_(\d+)/);
         if (!match) return;
         const [, prize, set, pos] = match;
         const key = 'G' + prize + '_' + set;
-        if (!sets[key]) sets[key] = { prize: 'G' + prize, set, nums: [] };
-        sets[key].nums[parseInt(pos) - 1] = parseInt($(el).text().trim());
+        if (!groups[key]) groups[key] = { prize: 'G' + prize, set, nums: [] };
+        groups[key].nums[parseInt(pos) - 1] = parseInt($(el).text().trim());
       });
-      const setsArr = Object.entries(sets)
+      const setsArr = Object.entries(groups)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([, { prize, set, nums }]) => ({
           label: (PRIZE_LABELS[prize] || prize) + ' bộ ' + set,
-          numbers: nums.filter((n) => !isNaN(n)),
+          numbers: nums.filter(n => !isNaN(n)),
         }));
       if (setsArr.length === 0) return null;
-
-      const kySo = $('div.title_tt').first().text().match(/#(\d+)/)?.[1] || '';
-      const drawDate = $('div.title_tt').first().text().match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '';
-      return { sets: setsArr, kySo, drawDate };
+      const titleText = $('div.title_tt').first().text();
+      return {
+        sets: setsArr,
+        kySo: titleText.match(/#(\d+)/)?.[1] || '',
+        drawDate: titleText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '',
+      };
     }
 
+    // LOTTO535 — có 2 kỳ/ngày
     if (product === 'lotto535') {
-      let foundKySo = '';
-      let foundNumbers = [];
-      let foundPower = null;
-
+      const results = [];
       $('div.title_tt').each((_, titleEl) => {
         const titleText = $(titleEl).text();
         const kyMatch = titleText.match(/#(\d+)/);
         if (!kyMatch) return;
+        const ky = kyMatch[1];
 
-        // Nếu có kysoTarget thì chỉ lấy kỳ đó
-        if (kysoTarget && kyMatch[1] !== kysoTarget) return;
+        // Tìm span.ball_lotto gần nhất sau title này
+        const allBalls = [];
+        let powerNum = null;
 
-        // Lấy div.box_ketqua ngay sau title_tt này
-        const boxKetqua = $(titleEl).closest('.bkqtlotto, .bangketqua, div').next('.box_ketqua, div.box_ketqua');
-        const targetDiv = boxKetqua.length ? boxKetqua : $(titleEl).parent().find('.box_ketqua, div.box_ketqua').first();
+        // Lấy parent của title rồi tìm ball trong đó
+        const parent = $(titleEl).parent();
+        parent.find('span.ball_lotto').each((_, el) => {
+          const cls = $(el).attr('class') || '';
+          const n = parseInt($(el).text().trim());
+          if (isNaN(n)) return;
+          if (cls.includes('ball_power2')) {
+            powerNum = n;
+          } else {
+            allBalls.push(n);
+          }
+        });
 
-        if (targetDiv.length) {
-          foundNumbers = [];
-          targetDiv.find('span.ball_lotto:not(.ball_power2)').each((_, el) => {
-            const n = parseInt($(el).text().trim());
-            if (!isNaN(n) && n >= 1) foundNumbers.push(n);
+        if (allBalls.length > 0) {
+          results.push({
+            ky,
+            numbers: allBalls.slice(0, 5),
+            powerNumber: powerNum,
+            drawDate: titleText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '',
           });
-          const powerEl = targetDiv.find('span.ball_lotto.ball_power2').first();
-          foundPower = null;
-          if (powerEl.length) foundPower = parseInt(powerEl.text().trim());
         }
-
-        foundKySo = kyMatch[1];
-        if (foundNumbers.length > 0) return false; // break
       });
 
-      if (foundNumbers.length > 0) {
-        const dateText = $('div.title_tt').first().text();
-        const drawDate = dateText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '';
-        return { numbers: foundNumbers.slice(0, 5), powerNumber: foundPower, kySo: foundKySo, drawDate };
-      }
-      return null;
+      if (results.length === 0) return null;
+
+      // Nếu có kysoTarget thì tìm đúng kỳ
+      const target = kysoTarget
+        ? results.find(r => r.ky === kysoTarget)
+        : results[0];
+
+      if (!target) return null;
+      return {
+        numbers: target.numbers,
+        powerNumber: target.powerNumber,
+        kySo: target.ky,
+        drawDate: target.drawDate,
+      };
     }
 
+    // MEGA, POWER, KENO
     const selectorMap = {
-      mega: 'span.ball_orange, span.ball.ball_orange',
-      power: 'span.ball_power, span.ball.ball_power',
-      keno: 'span.ball_keno, span.ball.ball_keno',
-      lotto535: 'span.ball_lotto:not(.ball_power2)',
+      mega:     'span.ball_orange, span.ball.ball_orange',
+      power:    'span.ball_power, span.ball.ball_power',
+      keno:     'span.ball_keno, span.ball.ball_keno',
     };
 
     const numbers = [];
+    let powerNumber = null;
+
     $(selectorMap[product] || 'span[class*="ball"]').each((_, el) => {
       const n = parseInt($(el).text().trim());
       if (!isNaN(n) && n >= 1) numbers.push(n);
     });
 
-    let powerNumber = null;
     if (product === 'power') {
       const powerEl = $('span.ball_power2, span.ball.ball_power2').first();
       if (powerEl.length) powerNumber = parseInt(powerEl.text().trim());
@@ -320,20 +336,18 @@ async function scrapeWithAxios(url, product, kysoTarget) {
     const uniqueNums = [...new Set(numbers)].slice(0, maxMap[product] || 6);
     if (uniqueNums.length === 0) return null;
 
-    // Parse kySo và drawDate từ div.title_tt (ưu tiên đúng container kết quả)
-    const boxKqxsdt = $('div.box_kqxsdt div.title_tt, div#noidung div.title_tt');
-    const titleEl = boxKqxsdt.length ? boxKqxsdt.first() : $('div.title_tt').first();
-    const titleText = titleEl.text();
-    const kySo =
-      titleText.match(/#(\d+)/)?.[1] ||
-      $('span.period_live').first().text().replace(/[^0-9]/g, '') ||
-      '';
-    const drawDate =
-      titleText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] ||
-      '';
+    const titleText = $('div.title_tt').first().text();
+    const kythuong = $('div.kythuong').first().text();
+    const kyve = $('div.kyve').first().text();
+
+    const sourceText = titleText || kythuong || kyve;
+    const kySo = sourceText.match(/#(\d+)/)?.[1] ||
+                 $('span.period_live').first().text().replace(/[^0-9]/g, '') ||
+                 $('span#cur_ky').first().text().replace(/[^0-9]/g, '') || '';
+    const drawDate = sourceText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '';
 
     return { numbers: uniqueNums, powerNumber, kySo, drawDate };
-  } catch (e) {
+  } catch(e) {
     console.log('[scrapeWithAxios] failed:', e.message);
     return null;
   }
