@@ -262,13 +262,33 @@ async function scrapeWithAxios(url, product, kysoTarget) {
 
     // LOTTO535
     if (product === 'lotto535') {
-      // Trang trực tiếp lotto535 không có div.title_tt
-      // Lấy kySo từ span.period_live hoặc div.kyve hoặc div.kythuong
-      const kySoEl = $('span.period_live, div.kyve, div.kythuong').first();
-      const kySoText = kySoEl.text();
-      const kySo = kySoText.match(/#(\d+)/)?.[1] || '';
-      const drawDate = kySoText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] ||
-                       new Date().toLocaleDateString('vi-VN');
+      // Thử nhiều selector cho kySo
+      let kySo = '';
+      let drawDate = '';
+
+      // Trang theo ngày: div.title_tt
+      $('div.title_tt').each((_, el) => {
+        const text = $(el).text();
+        const kyMatch = text.match(/#(\d+)/);
+        const dateMatch = text.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        if (kyMatch && !kySo) kySo = kyMatch[1];
+        if (dateMatch && !drawDate) drawDate = dateMatch[0];
+      });
+
+      // Trang trực tiếp: span.period_live, div.kyve, div.kythuong
+      if (!kySo) {
+        const els = ['span.period_live', 'div.kyve', 'div.kythuong'];
+        for (const sel of els) {
+          const text = $(sel).first().text();
+          const kyMatch = text.match(/#(\d+)/);
+          const dateMatch = text.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+          if (kyMatch) { kySo = kyMatch[1]; }
+          if (dateMatch) { drawDate = dateMatch[0]; }
+          if (kySo) break;
+        }
+      }
+
+      if (!drawDate) drawDate = new Date().toLocaleDateString('vi-VN');
 
       // Parse numbers từ toàn trang (trang trực tiếp chỉ có 1 kỳ)
       const numbers = [];
