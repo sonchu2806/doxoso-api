@@ -107,13 +107,36 @@ async function getCurrentInfo(product) {
     let currentDate = '';
 
     if (product === 'max3d' || product === 'max3dpro') {
-      // Max3D dùng trang kết quả theo ngày (HTML tĩnh), thử từ hôm nay lùi tối đa 7 ngày.
-      for (let offset = 0; offset < 7; offset++) {
+      // Max3D/Max3DPro: trang theo ngày có thể "chưa mở thưởng" trước 18h,
+      // nhưng vẫn chứa các kỳ trước. Ta lấy kỳ lớn nhất có trong trang.
+      const extractLatestFromHtml = ($, fallbackDate) => {
+        const candidates = [];
+        $('div.title_tt, div.kyve, div.kythuong').each((_, el) => {
+          const text = $(el).text() || '';
+          const kyMatch = text.match(/#(\d+)/);
+          if (!kyMatch) return;
+          const kyNum = parseInt(kyMatch[1], 10);
+          if (Number.isNaN(kyNum)) return;
+          const dateMatch = text.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+          candidates.push({
+            ky: kyMatch[1],
+            kyNum,
+            date: dateMatch ? dateMatch[0] : fallbackDate,
+          });
+        });
+        if (candidates.length === 0) return null;
+        candidates.sort((a, b) => b.kyNum - a.kyNum);
+        return candidates[0];
+      };
+
+      // thử từ hôm nay lùi tối đa 14 ngày (đủ nhiều cho các ngày không quay)
+      for (let offset = 0; offset < 14; offset++) {
         const day = new Date();
         day.setDate(day.getDate() - offset);
         const dd = String(day.getDate()).padStart(2, '0');
         const mm = String(day.getMonth() + 1).padStart(2, '0');
         const yyyy = day.getFullYear();
+        const fallbackDate = dd + '/' + mm + '/' + yyyy;
         const todayUrl = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dd + '-' + mm + '-' + yyyy + '.html';
 
         try {
@@ -125,16 +148,11 @@ async function getCurrentInfo(product) {
             timeout: 20000,
           });
           const $ = cheerio.load(html);
-          const titleText = $('div.title_tt').first().text();
-          const kyveText = $('div.kyve').first().text();
-          const kythuongText = $('div.kythuong').first().text();
-          const periodText = $('span.period_live').first().text();
-          const sourceText = titleText || kyveText || kythuongText || periodText;
-          const kyMatch = sourceText.match(/#(\d+)/);
-          const dateMatch = sourceText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-          if (kyMatch) currentKy = kyMatch[1];
-          if (dateMatch) currentDate = dateMatch[0];
-          if (!currentDate) currentDate = dd + '/' + mm + '/' + yyyy;
+          const latest = extractLatestFromHtml($, fallbackDate);
+          if (latest) {
+            currentKy = latest.ky;
+            currentDate = latest.date || fallbackDate;
+          }
           if (currentKy && currentDate) break;
         } catch (_e) {
           // tiếp tục thử ngày trước đó
@@ -218,8 +236,51 @@ async function getCurrentInfo(product) {
   }
 }
 
+async function findDateUrlByKySo(product, kyso, lookbackDays = 260) {
+  const baseSlug = BASE_URL_MAP[product];
+  if (!baseSlug || !kyso) return null;
+  const drawDays = new Set(DRAW_DAYS[product] || [0, 1, 2, 3, 4, 5, 6]);
+  const normalizedKy = String(kyso).replace(/^0+/, '');
+  const targetRegex = new RegExp('#0*' + normalizedKy + '\\b');
+
+  for (let i = 0; i < lookbackDays; i++) {
+    const day = new Date();
+    day.setDate(day.getDate() - i);
+    if (!drawDays.has(day.getDay())) continue;
+
+    const dd = String(day.getDate()).padStart(2, '0');
+    const mm = String(day.getMonth() + 1).padStart(2, '0');
+    const yyyy = day.getFullYear();
+    const url = 'https://www.ketquadientoan.com/' + baseSlug + '/' + dd + '-' + mm + '-' + yyyy + '.html';
+
+    try {
+      const { data: html } = await axios.get(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept-Language': 'vi-VN,vi;q=0.9',
+        },
+        timeout: 12000,
+      });
+      if (targetRegex.test(String(html || ''))) {
+        return url;
+      }
+    } catch (_e) {
+      // bỏ qua ngày lỗi, thử ngày tiếp theo
+    }
+  }
+  return null;
+}
+
 // Tính URL từ kyso
 async function getUrlFromKySo(product, kyso) {
+  if ((product === 'max3d' || product === 'max3dpro') && kyso) {
+    const directUrl = await findDateUrlByKySo(product, kyso);
+    if (directUrl) {
+      console.log('[getUrlFromKySo direct] ' + product + ' kyso=' + kyso + ' → ' + directUrl);
+      return directUrl;
+    }
+  }
+
   const info = await getCurrentInfo(product);
   if (!info.currentKy || !info.currentDate) return VL_URLS[product];
 
@@ -1101,6 +1162,32 @@ app.get('/debug-lotto535', async (req, res) => {
     });
   } catch(e) {
     res.json({ error: e.message });
+  }
+});
+
+app.get('/debug-resolved-url', async (req, res) => {
+  try {
+    const product = String(req.query.product || '').trim();
+    const kyso = String(req.query.kyso || '').trim();
+    if (!product) return res.status(400).json({ success: false, error: 'Thiếu product' });
+
+    const supported = Object.keys(VL_URLS);
+    if (!supported.includes(product)) {
+      return res.status(400).json({ success: false, error: 'Product không hợp lệ', supported });
+    }
+
+    const currentInfo = await getCurrentInfo(product);
+    const resolvedUrl = kyso ? await getUrlFromKySo(product, kyso) : VL_URLS[product];
+
+    res.json({
+      success: true,
+      product,
+      kyso: kyso || null,
+      currentInfo,
+      resolvedUrl,
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
