@@ -303,7 +303,7 @@ function extractKyAndDateFromText(blob) {
 }
 
 function parseOfficialMax3DFromVietlott($, isPro) {
-  const wrap = isPro ? $('#divMax3DPlus') : $('#divMax3D');
+  const wrap = isPro ? $('#divMax3DProPlus') : $('#divMax3D');
   const table = wrap.find('table.table-hover').first();
   if (!table.length) return null;
   const sets = [];
@@ -410,14 +410,11 @@ function uniqueKenoNumsUpTo20(arr) {
 }
 
 function parseOfficialKenoFromVietlott($, kysoTarget) {
-  const box = $('div.day_so_ket_qua_v2').first();
   const nums = [];
-  if (box.length) {
-    box.find('span.bong_tron.small').each((_, el) => {
-      const n = parseInt($(el).text().trim(), 10);
-      if (!Number.isNaN(n) && n >= 1 && n <= 80) nums.push(n);
-    });
-  }
+  $('span.bong_tron.small').each((_, el) => {
+    const n = parseInt($(el).text().trim(), 10);
+    if (!Number.isNaN(n) && n >= 1 && n <= 80) nums.push(n);
+  });
 
   let drawDate = '';
   let kySo = '';
@@ -1618,6 +1615,39 @@ if (process.env.VIETLOTT_WARM_ON_BOOT !== '0') {
     warmVietlottRecentToSupabase().catch((e) => console.warn('[warm vietlott boot]', e.message));
   }, bootMs);
 }
+
+app.get('/debug-vietlott-html', async (req, res) => {
+  const product = String(req.query.product || 'mega');
+  const kyso = String(req.query.kyso || '');
+  try {
+    const id = kyso ? padVietlottId(product, kyso) : null;
+    const url = id ? buildVietlottDetailUrl(product, id) : buildVietlottListingUrl(product);
+    const { data: html } = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'vi-VN,vi;q=0.9',
+      },
+      timeout: 20000,
+    });
+    const $ = cheerio.load(html);
+    res.json({
+      url,
+      htmlLen: html.length,
+      hasBongTron: $('span.bong_tron').length,
+      hasDaysoketquav2: $('div.day_so_ket_qua_v2').length,
+      hasDivMax3D: $('#divMax3D').length,
+      bodySnippet: $('body').text().slice(0, 500).replace(/\s+/g, ' '),
+      bongTronList: $('span.bong_tron')
+        .map((_, el) => ({ text: $(el).text().trim(), cls: $(el).attr('class') }))
+        .get(),
+      daysoContent: $('div.day_so_ket_qua_v2').first().html()?.slice(0, 300) || '',
+      kysoMatch: ($('body').text().match(/#\s*(\d+)/) || [])[0] || '',
+      dateMatch: ($('body').text().match(/(\d{2}\/\d{2}\/\d{4})/) || [])[0] || '',
+    });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => {
