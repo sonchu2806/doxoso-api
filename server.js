@@ -1918,6 +1918,33 @@ app.get('/xskt', async (req, res) => {
   }
 });
 
+app.get('/admin/scrape-all', async (req, res) => {
+  const results = {};
+  for (const product of VIETLOTT_PRODUCT_IDS) {
+    try {
+      const result = await scrapeVietlott(product, null);
+      if (result?.kySo) {
+        await saveVietlottToSupabase(product, result.kySo, result);
+        results[product] = { ok: true, kySo: result.kySo };
+      } else {
+        results[product] = { ok: false, error: 'Không lấy được dữ liệu' };
+      }
+    } catch (e) {
+      results[product] = { ok: false, error: e.message };
+    }
+  }
+  try {
+    const xskt = await scrapeAllXSKT(null);
+    for (const [dai, data] of Object.entries(xskt)) {
+      await saveXSKTToSupabase(dai, data.drawDate, data);
+    }
+    results['xskt'] = { ok: true, count: Object.keys(xskt).length };
+  } catch (e) {
+    results['xskt'] = { ok: false, error: e.message };
+  }
+  res.json({ success: true, results });
+});
+
 app.get('/vietlott/keno/by-kyso', async (req, res) => {
   const { kyso } = req.query;
   if (!kyso) return res.status(400).json({ success: false, error: 'Thiếu kyso' });
