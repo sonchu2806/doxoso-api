@@ -303,7 +303,7 @@ function extractKyAndDateFromText(blob) {
 }
 
 function parseOfficialMax3DFromVietlott($, isPro) {
-  const wrap = isPro ? $('#divMax3DProPlus') : $('#divMax3D');
+  const wrap = isPro ? $('#divMax3DPlus') : $('#divMax3D');
   const table = wrap.find('table.table-hover').first();
   if (!table.length) return null;
   const sets = [];
@@ -320,14 +320,17 @@ function parseOfficialMax3DFromVietlott($, isPro) {
     else return;
     const cell = tds.eq(1);
     const parts = [];
-    cell.find('span.red').each((_, sp) => {
-      const w = $(sp).text().trim();
+    const pushThreeDigitSpan = ($sp) => {
+      const w = $sp.text().trim();
       if (/^\d{3}$/.test(w)) parts.push(w);
-    });
-    if (parts.length === 0) {
+    };
+    if (isPro) {
+      cell.find('span.red').each((_, sp) => pushThreeDigitSpan($(sp)));
+    } else {
       cell.find('span').each((_, sp) => {
-        const w = $(sp).text().trim();
-        if (/^\d{3}$/.test(w)) parts.push(w);
+        const cls = ($(sp).attr('class') || '').trim();
+        if (cls.includes('red')) return;
+        pushThreeDigitSpan($(sp));
       });
     }
     if (parts.length === 0) {
@@ -356,17 +359,25 @@ function parseOfficialMegaPowerL535FromVietlott($, product) {
   const area = left.length ? left : $('body');
   const box = area.find('div.day_so_ket_qua_v2').first();
   if (!box.length) return null;
-  const main = [];
+
   let powerNumber = null;
+  const powerEl = box.find('span.bong_tron.active, span.bong_tron.no-margin-right.active').first();
+  if (powerEl.length) {
+    const t = parseInt(powerEl.text().trim(), 10);
+    if (!Number.isNaN(t)) powerNumber = t;
+  }
+
+  const main = [];
   box.find('span.bong_tron').each((_, el) => {
     const $el = $(el);
     const cls = $el.attr('class') || '';
+    if (cls.includes('active')) return;
     const t = parseInt($el.text().trim(), 10);
     if (Number.isNaN(t)) return;
-    if (cls.includes('active')) powerNumber = t;
-    else main.push(t);
+    main.push(t);
   });
-  const blob = area.text();
+
+  const blob = String($('body').text() || '').replace(/\s+/g, ' ');
   let { kySo, drawDate } = extractKyAndDateFromText(blob);
 
   if (product === 'mega') {
@@ -394,32 +405,56 @@ function parseOfficialMegaPowerL535FromVietlott($, product) {
   return null;
 }
 
+function uniqueKenoNumsUpTo20(arr) {
+  return [...new Set(arr)].slice(0, 20);
+}
+
 function parseOfficialKenoFromVietlott($, kysoTarget) {
-  let row = null;
+  const box = $('div.day_so_ket_qua_v2').first();
+  const nums = [];
+  if (box.length) {
+    box.find('span.bong_tron.small').each((_, el) => {
+      const n = parseInt($(el).text().trim(), 10);
+      if (!Number.isNaN(n) && n >= 1 && n <= 80) nums.push(n);
+    });
+  }
+
+  let drawDate = '';
+  let kySo = '';
+  let metaRow = null;
   $('table tbody tr').each((_, tr) => {
     const tds = $(tr).find('td');
     if (tds.length < 3) return;
-    const nBong = tds.eq(2).find('span.bong_tron').length;
-    if (nBong >= 10) {
-      row = tr;
-      return false;
-    }
+    const t0 = tds.eq(0).text();
+    const t1 = tds.eq(1).text();
+    const dateMatch = t0.match(/(\d{2}\/\d{2}\/\d{4})/);
+    if (!dateMatch) return;
+    const kyFromHash = (t1.match(/#\s*(\d+)/) || [])[1];
+    const kyLong = (t1.match(/(\d{6,})/) || [])[1];
+    if (!kyFromHash && !kyLong) return;
+    drawDate = dateMatch[1];
+    kySo = kyFromHash || kyLong || '';
+    metaRow = tr;
+    return false;
   });
-  if (!row) return null;
-  const tds = $(row).find('td');
-  const drawDate = (tds.eq(0).text().match(/\d{2}\/\d{2}\/\d{4}/) || [])[0] || '';
-  const kyCell = tds.eq(1).text();
-  let kySo = (kyCell.match(/#\s*(\d+)/) || [])[1] || '';
-  if (!kySo) kySo = (kyCell.match(/(\d{6,})/) || [])[1] || '';
-  const cellForNums = tds.length >= 3 ? tds.eq(2) : $(row);
-  const nums = [];
-  cellForNums.find('span.bong_tron').each((_, el) => {
-    const n = parseInt($(el).text().trim(), 10);
-    if (!Number.isNaN(n) && n >= 1 && n <= 80) nums.push(n);
-  });
-  const unique = [...new Set(nums)].slice(0, 20);
+
+  if (uniqueKenoNumsUpTo20(nums).length < 10 && metaRow) {
+    const tds = $(metaRow).find('td');
+    const cellForNums = tds.length >= 3 ? tds.eq(2) : $(metaRow);
+    cellForNums.find('span.bong_tron.small, span.bong_tron').each((_, el) => {
+      const n = parseInt($(el).text().trim(), 10);
+      if (!Number.isNaN(n) && n >= 1 && n <= 80) nums.push(n);
+    });
+  }
+
+  const unique = uniqueKenoNumsUpTo20(nums);
   if (unique.length < 10) return null;
   if (!kySo && kysoTarget) kySo = String(kysoTarget).replace(/\D/g, '');
+  if (!drawDate || !kySo) {
+    const { kySo: k2, drawDate: d2 } = extractKyAndDateFromText($('body').text());
+    if (!kySo) kySo = k2;
+    if (!drawDate) drawDate = d2;
+  }
   return { numbers: unique, powerNumber: null, kySo, drawDate };
 }
 
