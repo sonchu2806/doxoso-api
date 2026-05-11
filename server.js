@@ -1489,6 +1489,90 @@ async function warmVietlottRecentToSupabase() {
   console.log('[warm vietlott] Hoàn tất một vòng');
 }
 
+/** Ước lượng số kỳ cần lùi để phủ ~months tháng (Keno có trần env). */
+function estimateBackfillSteps(product, months) {
+  const m = Math.max(1, Math.min(6, months));
+  if (product === 'lotto535') {
+    return Math.ceil(m * 31 * 2.1);
+  }
+  if (product === 'keno') {
+    const cap = Math.max(500, Math.min(20000, parseInt(process.env.VIETLOTT_BACKFILL_KENO_MAX || '6000', 10)));
+    const est = Math.ceil(m * 30 * 130);
+    return Math.min(cap, Math.max(est, 200));
+  }
+  return Math.ceil(m * 4.5 * 3 * 1.2);
+}
+
+/**
+ * Lùi từ kỳ hiện tại, scrape từng kỳ và upsert Supabase (bỏ qua kỳ đã có đủ dữ liệu).
+ * scrapeVietlott đã gọi saveVietlottToSupabase khi thành công.
+ */
+async function backfillVietlottMonthsToSupabase(months, options) {
+  const opts = options || {};
+  const delayMs = Math.max(
+    100,
+    Math.min(2500, parseInt(process.env.VIETLOTT_BACKFILL_DELAY_MS || '350', 10))
+  );
+  const products = (opts.products || VIETLOTT_PRODUCT_IDS).filter((p) =>
+    VIETLOTT_PRODUCT_IDS.includes(p)
+  );
+
+  const stats = {
+    months,
+    products,
+    byProduct: {},
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+  };
+
+  for (const product of products) {
+    const by = { skipped: 0, fetched: 0, errors: 0, steps: 0, planned: 0 };
+    stats.byProduct[product] = by;
+    try {
+      const info = await getCurrentInfo(product);
+      const cur = parseInt(String(info?.currentKy || '').replace(/\D/g, ''), 10);
+      if (Number.isNaN(cur) || cur < 1) {
+        by.errors++;
+        continue;
+      }
+      const depth = estimateBackfillSteps(product, months);
+      by.planned = depth;
+      for (let i = 0; i < depth; i++) {
+        const n = cur - i;
+        if (n < 1) break;
+        const kyStr = padVietlottId(product, n);
+        by.steps++;
+        const had = await getVietlottFromSupabase(product, kyStr);
+        const filled =
+          had &&
+          ((Array.isArray(had.numbers) && had.numbers.length > 0) ||
+            (Array.isArray(had.sets) && had.sets.length > 0));
+        if (filled) {
+          by.skipped++;
+          continue;
+        }
+        try {
+          const result = await scrapeVietlott(product, kyStr);
+          const ok =
+            result &&
+            ((Array.isArray(result.numbers) && result.numbers.length > 0) ||
+              (Array.isArray(result.sets) && result.sets.length > 0));
+          if (ok) by.fetched++;
+          else by.errors++;
+        } catch (_e) {
+          by.errors++;
+        }
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    } catch (e) {
+      by.errors++;
+      console.warn('[backfill vietlott]', product, e.message);
+    }
+  }
+  stats.finishedAt = new Date().toISOString();
+  return stats;
+}
+
 // Scrape Keno theo kyso — dùng trang tra cứu
 async function scrapeKenoByKySo(kyso) {
   const cacheKey = 'vl_keno_' + kyso;
@@ -1916,6 +2000,103 @@ app.get('/xskt', async (req, res) => {
     console.error('XSKT error:', e.message);
     res.status(500).json({ success: false, error: e.message });
   }
+});
+
+/** Đếm dòng + vài mẫu để biết dữ liệu đã vào Supabase chưa (cần env + quyền SELECT trên bảng). */
+app.get('/admin/supabase-status', async (req, res) => {
+  if (!supabase) {
+    return res.json({
+      success: true,
+      supabaseConfigured: false,
+      message: 'Chưa cấu hình SUPABASE_URL / SUPABASE_ANON_KEY trên server.',
+    });
+  }
+  const tables = {};
+  const vlCount = await supabase.from('vietlott_results').select('*', { count: 'exact', head: true });
+  tables.vietlott_results = {
+    count: vlCount.count,
+    error: vlCount.error ? vlCount.error.message : null,
+  };
+  const xsCount = await supabase.from('xskt_results').select('*', { count: 'exact', head: true });
+  tables.xskt_results = {
+    count: xsCount.count,
+    error: xsCount.error ? xsCount.error.message : null,
+  };
+  const vlSample = await supabase
+    .from('vietlott_results')
+    .select('product, kyso, draw_date')
+    .order('product', { ascending: true })
+    .order('kyso', { ascending: false })
+    .limit(18);
+  const xsSample = await supabase.from('xskt_results').select('dai, draw_date').limit(12);
+  res.json({
+    success: true,
+    supabaseConfigured: true,
+    tables,
+    sampleVietlott: vlSample.error ? { error: vlSample.error.message } : vlSample.data || [],
+    sampleXskt: xsSample.error ? { error: xsSample.error.message } : xsSample.data || [],
+  });
+});
+
+/**
+ * Backfill Vietlott ~months tháng gần đây vào Supabase (mặc định 2).
+ * Keno: giới hạn VIETLOTT_BACKFILL_KENO_MAX (mặc định 6000 kỳ lùi) vì mật độ kỳ cao.
+ * ?sync=1 — chạy xong mới trả JSON (lâu, dễ timeout trên Railway).
+ * ?keno=0 — bỏ qua Keno.
+ * ?products=mega,power — chỉ các game liệt kê.
+ */
+app.get('/admin/backfill-vietlott', async (req, res) => {
+  if (!supabase) {
+    return res.status(400).json({
+      success: false,
+      error: 'Chưa cấu hình SUPABASE_URL / SUPABASE_ANON_KEY.',
+    });
+  }
+  const months = Math.min(6, Math.max(1, parseInt(String(req.query.months || '2'), 10)));
+  const sync = req.query.sync === '1' || req.query.wait === '1';
+  const includeKeno = req.query.keno !== '0' && req.query.skipKeno !== '1';
+  let productList = [...VIETLOTT_PRODUCT_IDS];
+  const only = String(req.query.products || '').trim();
+  if (only) {
+    productList = only
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter((p) => VIETLOTT_PRODUCT_IDS.includes(p));
+    if (productList.length === 0) {
+      return res.status(400).json({ success: false, error: 'products không hợp lệ' });
+    }
+  }
+  if (!includeKeno) productList = productList.filter((p) => p !== 'keno');
+  if (productList.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Không còn sản phẩm sau khi lọc (thử bỏ keno=0 hoặc thêm products).',
+    });
+  }
+
+  const opts = { products: productList };
+
+  if (sync) {
+    try {
+      const stats = await backfillVietlottMonthsToSupabase(months, opts);
+      return res.json({ success: true, months, mode: 'sync', stats });
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  }
+
+  backfillVietlottMonthsToSupabase(months, opts)
+    .then((stats) => console.log('[backfill vietlott] xong', JSON.stringify(stats)))
+    .catch((e) => console.error('[backfill vietlott]', e));
+
+  return res.json({
+    success: true,
+    months,
+    mode: 'background',
+    products: productList,
+    message:
+      'Đang backfill nền (có thể 10–60+ phút). Theo dõi log Railway và GET /admin/supabase-status. Thử ?sync=1 khi chạy local.',
+  });
 });
 
 app.get('/admin/scrape-all', async (req, res) => {
