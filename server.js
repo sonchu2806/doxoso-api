@@ -1836,7 +1836,7 @@ async function scrapeAllXSKT(dateStr, region = 'mn') {
           allResults[daiName] = {
             specialPrize,
             prizes: provincePrizes[i],
-            drawDate: toViDate(new Date()),
+            drawDate: (() => { const d = new Date(); return String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0') + '/' + d.getFullYear(); })(),
           };
         }
       });
