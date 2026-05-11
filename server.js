@@ -40,27 +40,10 @@ function toSlugDate(d) {
   return dd + '-' + mm + '-' + yyyy;
 }
 
-/** Trực tiếp ketquadientoan — chỉ dùng sau khi đã thử vietlott.vn. */
-const VL_URLS = {
-  mega:     'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-mega-6-45.html',
-  power:    'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-power-655.html',
-  keno:     'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-keno.html',
-  max3d:    'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-max-3d.html',
-  max3dpro: 'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-max3d-pro.html',
-  lotto535: 'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-lotto-535.html',
-};
+/** Vietlott — chỉ dùng vietlott.vn; URL/slug ketquadientoan đã gỡ (khôi phục từ git nếu cần). */
 
-/** Chỉ các game Vietlott — mọi logic ưu tiên vietlott.vn / VL_URLS chỉ dùng trong nhánh này, không áp dụng cho XSKT. */
+/** Chỉ các game Vietlott */
 const VIETLOTT_PRODUCT_IDS = ['mega', 'power', 'max3d', 'max3dpro', 'lotto535', 'keno'];
-
-const BASE_URL_MAP = {
-  mega:     'ket-qua-xo-so-dien-toan-mega-6-45',
-  power:    'ket-qua-xo-so-dien-toan-power-655',
-  keno:     'ket-qua-xo-so-dien-toan-keno',
-  max3d:    'ket-qua-xo-so-dien-toan-max-3d',
-  max3dpro: 'ket-qua-xo-so-dien-toan-max3d-pro',
-  lotto535: 'ket-qua-xo-so-dien-toan-lotto-535',
-};
 
 const DRAW_DAYS = {
   mega:     [0, 3, 5],
@@ -154,7 +137,40 @@ async function withBrowser(fn) {
   }
 }
 
-// Lấy kỳ hiện tại + ngày từ trang trực tiếp
+/** Kỳ + ngày từ trang kết quả vietlott.vn (thay luồng ketquadientoan đã tắt). */
+async function getCurrentKyFromVietlottListing(product) {
+  const listUrl = buildVietlottListingUrl(product);
+  if (!listUrl) return { currentKy: '', currentDate: '' };
+  try {
+    const { data: html } = await axios.get(listUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'vi-VN,vi;q=0.9',
+      },
+      timeout: 20000,
+    });
+    const $ = cheerio.load(html);
+    const blob =
+      ($('#divLeftContent').text() || '') +
+      ' ' +
+      ($('.chitietketqua').first().text() || '') +
+      ' ' +
+      ($('body').text() || '');
+    const kyMatch = blob.match(/#\s*(\d+)/);
+    const dateMatch = blob.match(/(\d{2}\/\d{2}\/\d{4})/);
+    return {
+      currentKy: kyMatch ? kyMatch[1] : '',
+      currentDate: dateMatch ? dateMatch[0] : '',
+    };
+  } catch (e) {
+    console.warn('[getCurrentKyFromVietlottListing]', product, e.message);
+    return { currentKy: '', currentDate: '' };
+  }
+}
+
+// Lấy kỳ hiện tại + ngày (vietlott listing; ketquadientoan đã tắt)
 async function getCurrentInfo(product) {
   const cacheKey = 'current_' + product;
   const cached = cache[cacheKey];
@@ -164,127 +180,13 @@ async function getCurrentInfo(product) {
     let currentKy = '';
     let currentDate = '';
 
-    if (product === 'max3d' || product === 'max3dpro') {
-      const drawDays = new Set(DRAW_DAYS[product] || []);
-      const now = new Date();
-      const beforeCutoff = now.getHours() < 18 || (now.getHours() === 18 && now.getMinutes() < 30);
-      const startDate = new Date(now);
-      // Trước 18:30 của ngày quay thì dùng kỳ trước đó.
-      if (beforeCutoff && drawDays.has(startDate.getDay())) {
-        startDate.setDate(startDate.getDate() - 1);
-      }
-
-      // thử từ startDate lùi tối đa 14 ngày quay gần nhất.
-      for (let offset = 0; offset < 14; offset++) {
-        const day = new Date(startDate);
-        day.setDate(startDate.getDate() - offset);
-        if (!drawDays.has(day.getDay())) continue;
-        const dd = String(day.getDate()).padStart(2, '0');
-        const mm = String(day.getMonth() + 1).padStart(2, '0');
-        const yyyy = day.getFullYear();
-        const fallbackDate = dd + '/' + mm + '/' + yyyy;
-        const todayUrl = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dd + '-' + mm + '-' + yyyy + '.html';
-
-        try {
-          // Chỉ chấp nhận kỳ có dữ liệu sets thật, tránh dính kỳ "chưa quay".
-          const parsed = await scrapeWithAxios(todayUrl, product);
-          if (parsed && Array.isArray(parsed.sets) && parsed.sets.length > 0) {
-            currentKy = parsed.kySo || '';
-            currentDate = parsed.drawDate || fallbackDate;
-          }
-          if (currentKy && currentDate) break;
-        } catch (_e) {
-          // tiếp tục thử ngày trước đó
-        }
-      }
-    } else if (product === 'mega' || product === 'power') {
-      // Mega/Power: dùng trang theo ngày để tránh sai kỳ trước giờ quay (18:30).
-      const drawDays = new Set(DRAW_DAYS[product] || []);
-      const now = new Date();
-      const beforeCutoff = now.getHours() < 18 || (now.getHours() === 18 && now.getMinutes() < 30);
-      const startDate = new Date(now);
-      if (beforeCutoff && drawDays.has(startDate.getDay())) {
-        startDate.setDate(startDate.getDate() - 1);
-      }
-
-      for (let offset = 0; offset < 21; offset++) {
-        const day = new Date(startDate);
-        day.setDate(startDate.getDate() - offset);
-        if (!drawDays.has(day.getDay())) continue;
-        const daySlug = toSlugDate(day);
-        const dayVi = toViDate(day);
-        const dayUrl = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + daySlug + '.html';
-
-        try {
-          const { data: html } = await axios.get(dayUrl, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-              'Accept-Language': 'vi-VN,vi;q=0.9',
-            },
-            timeout: 20000,
-          });
-          const $ = cheerio.load(html);
-          const sourceText =
-            $('div.title_tt').first().text() ||
-            $('div.kyve').first().text() ||
-            $('div.kythuong').first().text() ||
-            $('span.period_live').first().text() ||
-            '';
-          const kyMatch = sourceText.match(/#(\d+)/);
-          const dateMatch = sourceText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-          if (kyMatch) currentKy = kyMatch[1];
-          currentDate = dateMatch ? dateMatch[0] : dayVi;
-          if (currentKy) break;
-        } catch (_e) {
-          // thử ngày quay trước đó
-        }
-      }
-    } else {
-      const url = VL_URLS[product];
-      if (!url) return { currentKy: '', currentDate: '' };
-
-      const { data: html } = await axios.get(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept-Language': 'vi-VN,vi;q=0.9',
-        },
-        timeout: 20000,
-      });
-
-      const $ = cheerio.load(html);
-
-      // Thử div.kythuong
-      const kythuong = $('div.kythuong').first().text();
-      if (kythuong) {
-        const kyMatch = kythuong.match(/#(\d+)/);
-        const dateMatch = kythuong.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-        if (kyMatch) currentKy = kyMatch[1];
-        if (dateMatch) currentDate = dateMatch[0];
-      }
-
-      // Thử div.kyve
-      if (!currentKy) {
-        const kyve = $('div.kyve').first().text();
-        if (kyve) {
-          const kyMatch = kyve.match(/#(\d+)/);
-          const dateMatch = kyve.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-          if (kyMatch) currentKy = kyMatch[1];
-          if (dateMatch && !currentDate) currentDate = dateMatch[0];
-        }
-      }
-
-      // Thử span.period_live
-      if (!currentKy) {
-        const period = $('span.period_live').first().text();
-        if (period) currentKy = period.replace(/[^0-9]/g, '');
-      }
-
-      // Thử span#cur_ky cho keno
-      if (!currentKy) {
-        const curKy = $('span#cur_ky').first().text();
-        if (curKy) currentKy = curKy.replace(/[^0-9]/g, '');
-      }
+    if (VIETLOTT_PRODUCT_IDS.includes(product)) {
+      const fromVl = await getCurrentKyFromVietlottListing(product);
+      currentKy = fromVl.currentKy || '';
+      currentDate = fromVl.currentDate || '';
     }
+
+    // ketquadientoan (getCurrentInfo): đã tắt — khôi phục từ git nếu cần.
 
     if (product === 'lotto535') {
       const now = new Date();
@@ -317,43 +219,8 @@ async function getCurrentInfo(product) {
   }
 }
 
-async function findDateUrlByKySo(product, kyso, lookbackDays = 90) {
-  const baseSlug = BASE_URL_MAP[product];
-  if (!baseSlug || !kyso) return null;
-  const drawDays = new Set(DRAW_DAYS[product] || [0, 1, 2, 3, 4, 5, 6]);
-  const normalizedKy = String(kyso).replace(/^0+/, '');
-  const targetRegex = new RegExp('#0*' + normalizedKy + '\\b');
-
-  for (let i = 0; i < lookbackDays; i++) {
-    const day = new Date();
-    day.setDate(day.getDate() - i);
-    if (!drawDays.has(day.getDay())) continue;
-
-    const dd = String(day.getDate()).padStart(2, '0');
-    const mm = String(day.getMonth() + 1).padStart(2, '0');
-    const yyyy = day.getFullYear();
-    const url = 'https://www.ketquadientoan.com/' + baseSlug + '/' + dd + '-' + mm + '-' + yyyy + '.html';
-
-    try {
-      const { data: html } = await axios.get(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept-Language': 'vi-VN,vi;q=0.9',
-        },
-        timeout: 3500,
-      });
-      if (targetRegex.test(String(html || ''))) {
-        // Xác thực lại bằng parser để tránh false positive từ danh sách/link liên quan.
-        const parsed = await scrapeWithAxios(url, product, String(kyso));
-        const parsedKy = String(parsed?.kySo || '').replace(/^0+/, '');
-        if (parsed && parsedKy === normalizedKy) {
-          return url;
-        }
-      }
-    } catch (_e) {
-      // bỏ qua ngày lỗi, thử ngày tiếp theo
-    }
-  }
+async function findDateUrlByKySo(_product, _kyso, _lookbackDays = 90) {
+  // Tắt: quét trang theo ngày trên ketquadientoan (khôi phục từ git nếu cần).
   return null;
 }
 
@@ -361,13 +228,13 @@ async function findDateUrlByKySo(product, kyso, lookbackDays = 90) {
 async function getUrlFromKySo(product, kyso) {
   if (!kyso) {
     if (VIETLOTT_PRODUCT_IDS.includes(product)) {
-      return buildVietlottListingUrl(product) || VL_URLS[product] || '';
+      return buildVietlottListingUrl(product) || '';
     }
-    return VL_URLS[product] || '';
+    return '';
   }
 
   if (!VIETLOTT_PRODUCT_IDS.includes(product)) {
-    return VL_URLS[product] || '';
+    return '';
   }
 
   if (product === 'max3d' || product === 'max3dpro' || product === 'mega' || product === 'power') {
@@ -572,505 +439,35 @@ function parseVietlottOfficialHtml($, product, kysoTarget) {
 
 async function scrapeWithAxios(url, product, kysoTarget) {
   try {
-    const isVietlott = String(url).includes('vietlott.vn');
-    const { data: html } = await axios.get(url, {
+    const u = String(url);
+    if (!u.includes('vietlott.vn')) return null;
+
+    const { data: html } = await axios.get(u, {
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.8',
       },
-      timeout: isVietlott ? 20000 : 15000,
+      timeout: 20000,
     });
 
     const $ = cheerio.load(html);
-
-    if (isVietlott) {
-      const offic = parseVietlottOfficialHtml($, product, kysoTarget);
-      if (offic) return offic;
-      if (['mega', 'power', 'max3d', 'max3dpro', 'lotto535', 'keno'].includes(product)) {
-        console.log('[scrapeWithAxios] vietlott.vn parse failed', product);
-        return null;
-      }
+    const offic = parseVietlottOfficialHtml($, product, kysoTarget);
+    if (offic) return offic;
+    if (['mega', 'power', 'max3d', 'max3dpro', 'lotto535', 'keno'].includes(product)) {
+      console.log('[scrapeWithAxios] vietlott.vn parse failed', product);
     }
-
-    // MAX 3D
-    if (product === 'max3d' || product === 'max3dpro') {
-      console.log('[max3d axios] span count:', $('span[id^="max3d_G"]').length);
-      const isProProduct = product === 'max3dpro';
-      const matchProductContext = (textRaw) => {
-        const t = String(textRaw || '').toLowerCase();
-        const hasPro = /max\s*3d\s*pro|max3d\s*pro|3d\s*pro/.test(t);
-        if (isProProduct) return hasPro;
-        return !hasPro;
-      };
-      const parse3dSetsFromTable = (tableRef) => {
-        const sets = [];
-        const pushTriples = (label, digits, expected) => {
-          const maxLen = Math.min(digits.length, expected * 3);
-          let setNo = 1;
-          for (let i = 0; i + 2 < maxLen; i += 3) {
-            sets.push({
-              label: label + ' bộ ' + setNo,
-              numbers: [digits[i], digits[i + 1], digits[i + 2]],
-            });
-            setNo++;
-          }
-        };
-        tableRef.find('tr').each((__, tr) => {
-          const tds = $(tr).find('td');
-          if (tds.length < 2) return;
-          const labelText = tds.eq(0).text().replace(/\s+/g, ' ').trim().toLowerCase();
-          const numText = tds.eq(1).text().replace(/\s+/g, ' ').trim();
-          const digits = numText.split(' ').map((x) => parseInt(x, 10)).filter((n) => !Number.isNaN(n) && n >= 0 && n <= 9);
-          if (digits.length < 3) return;
-          if (labelText.includes('đặc biệt')) pushTriples('Đặc biệt', digits, 2);
-          else if (labelText.includes('giải nhất')) pushTriples('Giải nhất', digits, 4);
-          else if (labelText.includes('giải nhì')) pushTriples('Giải nhì', digits, 6);
-          else if (labelText.includes('giải ba')) pushTriples('Giải ba', digits, 8);
-        });
-        return sets;
-      };
-
-      if ($('span[id^="max3d_G"]').length > 0) {
-        const groups = {};
-        $('span[id^="max3d_G"]').each((_, el) => {
-          const match = el.attribs?.id?.match(/max3d_G(\d+)_(\d+)_(\d+)/);
-          if (!match) return;
-          const [, prize, set, pos] = match;
-          const key = 'G' + prize + '_' + set;
-          if (!groups[key]) groups[key] = { prize: 'G' + prize, set, nums: [] };
-          groups[key].nums[parseInt(pos) - 1] = parseInt($(el).text().trim());
-        });
-        const setsArr = Object.entries(groups)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([, { prize, set, nums }]) => ({
-            label: (PRIZE_LABELS[prize] || prize) + ' bộ ' + set,
-            numbers: nums.filter(n => !isNaN(n)),
-          }));
-        if (setsArr.length === 0) return null;
-        const titleText = $('div.title_tt').first().text();
-        const kyveText = $('div.kyve').first().text();
-        const kythuongText = $('div.kythuong').first().text();
-        const periodText = $('span.period_live').first().text();
-        const sourceText = titleText || kyveText || kythuongText || periodText;
-        const urlDate = (url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/) || []).slice(1).join('/');
-        const kySoParsed = sourceText.match(/#(\d+)/)?.[1] || '';
-        const drawDateParsed = sourceText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '';
-        return {
-          sets: setsArr,
-          kySo: kySoParsed || (kysoTarget || ''),
-          drawDate: drawDateParsed || urlDate || toViDate(new Date()),
-        };
-      }
-
-      // Fallback ưu tiên cho trang lịch sử: parse từng block .boxLiveKQXS
-      const drawsFromBlocks = [];
-      $('.boxLiveKQXS').each((_, box) => {
-        const boxEl = $(box);
-        const boxCtx = boxEl.text().replace(/\s+/g, ' ').trim();
-        if (!matchProductContext(boxCtx)) return;
-        const kyText = boxEl.find('.kyve').first().text().replace(/\s+/g, ' ').trim();
-        const kyMatch = kyText.match(/#(\d+)/);
-        if (!kyMatch) return;
-        const drawDateMatch = kyText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-        const sets = [];
-        const pushFromRow = (selector, labelPrefix) => {
-          boxEl.find(selector).find('div').each((idx, divEl) => {
-            const digits = $(divEl).find('span').map((__, sp) => parseInt($(sp).text().trim(), 10)).get()
-              .filter((n) => !Number.isNaN(n) && n >= 0 && n <= 9);
-            if (digits.length === 3) {
-              sets.push({ label: labelPrefix + ' bộ ' + (idx + 1), numbers: digits });
-            }
-          });
-        };
-        pushFromRow('td.max3d_number.max3d_g1', 'Đặc biệt');
-        pushFromRow('td.max3d_number.max3d_g2', 'Giải nhất');
-        pushFromRow('td.max3d_number.max3d_g3', 'Giải nhì');
-        // Có 2 hàng dùng class max3d_g2; hàng cuối là giải ba (nhiều bộ hơn)
-        const allG2Rows = boxEl.find('td.max3d_number.max3d_g2');
-        if (allG2Rows.length > 1) {
-          $(allG2Rows[allG2Rows.length - 1]).find('div').each((idx, divEl) => {
-            const digits = $(divEl).find('span').map((__, sp) => parseInt($(sp).text().trim(), 10)).get()
-              .filter((n) => !Number.isNaN(n) && n >= 0 && n <= 9);
-            if (digits.length === 3) {
-              sets.push({ label: 'Giải ba bộ ' + (idx + 1), numbers: digits });
-            }
-          });
-        }
-        if (sets.length > 0) {
-          drawsFromBlocks.push({
-            ky: kyMatch[1],
-            drawDate: drawDateMatch ? drawDateMatch[0] : '',
-            sets,
-          });
-        }
-      });
-
-      if (drawsFromBlocks.length > 0) {
-        const target = kysoTarget
-          ? drawsFromBlocks.find((d) => d.ky === String(kysoTarget).replace(/^0+/, '') || d.ky === String(kysoTarget))
-          : drawsFromBlocks[0];
-        if (!target) return null;
-        const urlDate = (url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/) || []).slice(1).join('/');
-        return {
-          sets: target.sets,
-          kySo: target.ky || '',
-          drawDate: target.drawDate || urlDate || toViDate(new Date()),
-        };
-      }
-
-      // Fallback cho trang theo ngày: parse bảng "Kỳ vé #xxxx"
-      const parsedDraws = [];
-      $('table').each((_, tbl) => {
-        const table = $(tbl);
-        const tableText = table.text().replace(/\s+/g, ' ').trim();
-        if (!/SỐ QUAY THƯỞNG/i.test(tableText) || !/MAX 3D/i.test(tableText)) return;
-        let prev = table.prev();
-        let ky = '';
-        let drawDate = '';
-        while (prev.length) {
-          const t = prev.text().replace(/\s+/g, ' ').trim();
-          const km = t.match(/Kỳ vé\s*#(\d+)/i);
-          if (km) {
-            ky = km[1];
-            const dm = t.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-            if (dm) drawDate = dm[0];
-            break;
-          }
-          prev = prev.prev();
-        }
-        if (!ky) return;
-
-        const sets = parse3dSetsFromTable(table);
-
-        if (sets.length > 0) {
-          parsedDraws.push({ ky, drawDate, sets });
-        }
-      });
-
-      // Fallback thêm: lấy ky/date từ text container gần table khi prev-sibling không có.
-      if (parsedDraws.length === 0) {
-        $('table').each((_, tbl) => {
-          const table = $(tbl);
-          const tableText = table.text().replace(/\s+/g, ' ').trim();
-          if (!/SỐ QUAY THƯỞNG/i.test(tableText) || !/MAX 3D/i.test(tableText)) return;
-          if (!matchProductContext(table.parent().text())) return;
-          const ctxText = (table.parent().text() || '').replace(/\s+/g, ' ');
-          const kyMatch = ctxText.match(/Kỳ vé\s*#(\d+)/i);
-          if (!kyMatch) return;
-          const dateMatch = ctxText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-          const sets = parse3dSetsFromTable(table);
-          if (sets.length > 0) {
-            parsedDraws.push({
-              ky: kyMatch[1],
-              drawDate: dateMatch ? dateMatch[0] : '',
-              sets,
-            });
-          }
-        });
-      }
-
-      // Fallback cuối: tìm block quanh #kyso rồi parse table gần đó
-      if (parsedDraws.length === 0) {
-        const targetMark = kysoTarget ? ('#' + String(kysoTarget).replace(/^0+/, '')) : '';
-        const htmlNorm = String(html || '').replace(/#0+/g, '#');
-        const idx = targetMark ? htmlNorm.indexOf(targetMark) : -1;
-        if (idx >= 0) {
-          const start = Math.max(0, idx - 4000);
-          const chunk = htmlNorm.slice(start, idx + 60000);
-          const $$ = cheerio.load(chunk);
-          const table = $$('table')
-            .filter((__, t) => {
-              const tx = $$(t).text().replace(/\s+/g, ' ').trim().toLowerCase();
-              return tx.includes('so quay thuong') && (tx.includes('max 3d') || tx.includes('max3d'));
-            })
-            .first();
-          const sets = [];
-          table.find('tr').each((__, tr) => {
-            const tds = $$(tr).find('td');
-            if (tds.length < 2) return;
-            const labelText = tds.eq(0).text().replace(/\s+/g, ' ').trim().toLowerCase();
-            const numText = tds.eq(1).text().replace(/\s+/g, ' ').trim();
-            const digits = numText.split(' ').map((x) => parseInt(x, 10)).filter((n) => !Number.isNaN(n) && n >= 0 && n <= 9);
-            if (digits.length < 3) return;
-            const push = (label, expected) => {
-              const maxLen = Math.min(digits.length, expected * 3);
-              let setNo = 1;
-              for (let i = 0; i + 2 < maxLen; i += 3) {
-                sets.push({ label: label + ' bộ ' + setNo, numbers: [digits[i], digits[i + 1], digits[i + 2]] });
-                setNo++;
-              }
-            };
-            if (labelText.includes('đặc biệt')) push('Đặc biệt', 2);
-            else if (labelText.includes('giải nhất')) push('Giải nhất', 4);
-            else if (labelText.includes('giải nhì')) push('Giải nhì', 6);
-            else if (labelText.includes('giải ba')) push('Giải ba', 8);
-          });
-          if (sets.length > 0) {
-            const kyInChunk = (chunk.match(/Kỳ vé\s*#(\d+)/i) || [])[1] || '';
-            const normalizedTarget = String(kysoTarget || '').replace(/^0+/, '');
-            const normalizedChunkKy = String(kyInChunk || '').replace(/^0+/, '');
-            if (kysoTarget && (!normalizedChunkKy || normalizedChunkKy !== normalizedTarget)) {
-              return null;
-            }
-            const dateMatch = chunk.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-            const urlDate = (url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/) || []).slice(1).join('/');
-            return {
-              sets,
-              kySo: kyInChunk || '',
-              drawDate: (dateMatch ? dateMatch[0] : '') || urlDate || toViDate(new Date()),
-            };
-          }
-        }
-        return null;
-      }
-      const targetDraw = kysoTarget
-        ? parsedDraws.find((d) => d.ky === String(kysoTarget).replace(/^0+/, '') || d.ky === String(kysoTarget))
-        : parsedDraws[0];
-      const chosen = targetDraw || (!kysoTarget ? parsedDraws[0] : null);
-      if (!chosen) return null;
-      const urlDate = (url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/) || []).slice(1).join('/');
-      return {
-        sets: chosen.sets,
-        kySo: chosen.ky || '',
-        drawDate: chosen.drawDate || urlDate || toViDate(new Date()),
-      };
-    }
-
-    // LOTTO535
-    if (product === 'lotto535') {
-      const allKys = [];
-
-      // Trang theo ngày có nhiều title_tt (21h trước, 13h sau)
-      $('div.title_tt').each((_, titleEl) => {
-        const titleText = $(titleEl).text();
-        const kyMatch = titleText.match(/#(\d+)/);
-        if (!kyMatch) return;
-
-        const parent = $(titleEl).parent();
-        const nums = [];
-        let power = null;
-        parent.find('span.ball_lotto').each((_, el) => {
-          const cls = $(el).attr('class') || '';
-          const n = parseInt($(el).text().trim());
-          if (isNaN(n)) return;
-          if (cls.includes('ball_power2')) power = n;
-          else nums.push(n);
-        });
-        if (nums.length > 0) {
-          allKys.push({
-            ky: kyMatch[1],
-            numbers: nums.slice(0, 5),
-            powerNumber: power,
-            drawDate: titleText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '',
-          });
-        }
-      });
-
-      // Trang trực tiếp chỉ có 1 kỳ, fallback từ toàn trang
-      if (allKys.length === 0) {
-        let kySo = '';
-        let drawDate = '';
-        const els = ['span.period_live', 'div.kyve', 'div.kythuong'];
-        for (const sel of els) {
-          const text = $(sel).first().text();
-          const kyMatch = text.match(/#(\d+)/);
-          const dateMatch = text.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-          if (kyMatch) kySo = kyMatch[1];
-          if (dateMatch) drawDate = dateMatch[0];
-          if (kySo) break;
-        }
-        if (!drawDate) drawDate = toViDate(new Date());
-
-        const numbers = [];
-        let powerNumber = null;
-        $('span.ball_lotto').each((_, el) => {
-          const cls = $(el).attr('class') || '';
-          const n = parseInt($(el).text().trim());
-          if (isNaN(n)) return;
-          if (cls.includes('ball_power2')) powerNumber = n;
-          else numbers.push(n);
-        });
-        if (numbers.length === 0) return null;
-        allKys.push({
-          ky: kySo || '',
-          numbers: numbers.slice(0, 5),
-          powerNumber,
-          drawDate,
-        });
-      }
-
-      const targetKyNum = kysoTarget ? parseInt(kysoTarget) : null;
-      let target = null;
-
-      if (targetKyNum) {
-        // Tìm chính xác theo kySo
-        target = allKys.find(k => k.ky === kysoTarget);
-
-        // Nếu không tìm thấy theo ky label → dùng index
-        if (!target && allKys.length > 0) {
-          // Kỳ lẻ → index 1 (kỳ 13h), kỳ chẵn → index 0 (kỳ 21h)
-          const isOdd = targetKyNum % 2 === 1;
-          target = isOdd ? allKys[1] : allKys[0];
-          if (target) target = { ...target, ky: kysoTarget };
-        }
-      } else {
-        target = allKys[0];
-      }
-
-      if (!target) return null;
-      return {
-        numbers: target.numbers,
-        powerNumber: target.powerNumber,
-        kySo: target.ky,
-        drawDate: target.drawDate,
-      };
-    }
-
-    // KENO (hỗ trợ chọn kỳ quá khứ theo trang kết quả ngày)
-    if (product === 'keno' && kysoTarget) {
-      const normalizedKy = String(kysoTarget).replace(/^0+/, '');
-      const htmlNorm = String(html || '').replace(/#0+/g, '#');
-      const idx = htmlNorm.indexOf('#' + normalizedKy);
-      if (idx >= 0) {
-        const start = Math.max(0, idx - 6000);
-        const chunk = htmlNorm.slice(start, idx + 40000);
-        const $$ = cheerio.load(chunk);
-        const nums = $$('span.ball_keno, span.ball.ball_keno, span[class*="ball_keno"]')
-          .map((_, el) => parseInt($$(el).text().trim(), 10))
-          .get()
-          .filter((n) => !Number.isNaN(n) && n >= 1);
-        const unique = [...new Set(nums)].slice(0, 20);
-        if (unique.length >= 10) {
-          const drawDate = (chunk.match(/(\d{2})\/(\d{2})\/(\d{4})/) || [])[0] || '';
-          return {
-            numbers: unique,
-            powerNumber: null,
-            kySo: String(kysoTarget),
-            drawDate,
-          };
-        }
-      }
-      return null;
-    }
-
-    // MEGA, POWER, KENO
-    const selectorMap = {
-      mega:     'span.ball_orange, span.ball.ball_orange',
-      power:    'span.ball_power, span.ball.ball_power',
-      keno:     'span.ball_keno, span.ball.ball_keno',
-    };
-
-    const numbers = [];
-    let powerNumber = null;
-
-    $(selectorMap[product] || 'span[class*="ball"]').each((_, el) => {
-      const n = parseInt($(el).text().trim());
-      if (!isNaN(n) && n >= 1) numbers.push(n);
-    });
-
-    if (product === 'power') {
-      const powerEl = $('span.ball_power2, span.ball.ball_power2').first();
-      if (powerEl.length) powerNumber = parseInt(powerEl.text().trim());
-    }
-
-    const maxMap = { keno: 20, lotto535: 5, mega: 6, power: 6 };
-    const uniqueNums = [...new Set(numbers)].slice(0, maxMap[product] || 6);
-    if (uniqueNums.length === 0) return null;
-
-    const titleText = $('div.title_tt').first().text();
-    const kythuong = $('div.kythuong').first().text();
-    const kyve = $('div.kyve').first().text();
-
-    const sourceText = titleText || kythuong || kyve;
-    const kySo = sourceText.match(/#(\d+)/)?.[1] ||
-                 $('span.period_live').first().text().replace(/[^0-9]/g, '') ||
-                 $('span#cur_ky').first().text().replace(/[^0-9]/g, '') || '';
-    const drawDate = sourceText.match(/(\d{2})\/(\d{2})\/(\d{4})/)?.[0] || '';
-
-    return { numbers: uniqueNums, powerNumber, kySo, drawDate };
+    return null;
   } catch(e) {
     console.log('[scrapeWithAxios] failed:', e.message, e.stack?.slice(0,200));
     return null;
   }
 }
 
-function parseVietlottByCheerio(product, html) {
-  const $ = cheerio.load(html);
-  const bodyText = $('body').text() || '';
-
-  const titleText = $('div.title_tt').first().text() || '';
-  const headerText = $('div.kythuong, div.kyve').first().text() || '';
-  const kySo =
-    ($('span.period_live').first().text() || '').replace(/[^0-9]/g, '') ||
-    ($('span#cur_ky').first().text() || '').replace(/[^0-9]/g, '') ||
-    ((titleText.match(/#(\d+)/) || [])[1] || '') ||
-    ((headerText.match(/#(\d+)/) || [])[1] || '');
-
-  const drawDate =
-    ((titleText.match(/(\d{2})\/(\d{2})\/(\d{4})/) || [])[0]) ||
-    ((headerText.match(/(\d{2})\/(\d{2})\/(\d{4})/) || [])[0]) ||
-    ((bodyText.match(/(\d{2})\/(\d{2})\/(\d{4})/) || [])[0]) ||
-    toViDate(new Date());
-
-  if (product === 'max3d' || product === 'max3dpro') {
-    const groups = {};
-    $('span[id^="max3d_G"]').each((_, el) => {
-      const id = ($(el).attr('id') || '').trim();
-      const match = id.match(/max3d_G(\d+)_(\d+)_(\d+)/);
-      if (!match) return;
-      const [, prize, set, pos] = match;
-      const key = 'G' + prize + '_' + set;
-      if (!groups[key]) groups[key] = { prize: 'G' + prize, set, nums: [] };
-      const num = parseInt($(el).text().trim(), 10);
-      if (!isNaN(num)) groups[key].nums[parseInt(pos, 10) - 1] = num;
-    });
-
-    const sets = Object.entries(groups)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([, { prize, set, nums }]) => ({
-        label: (PRIZE_LABELS[prize] || prize) + ' bộ ' + set,
-        numbers: nums.filter((n) => !isNaN(n)),
-      }))
-      .filter((x) => x.numbers.length > 0);
-
-    if (sets.length === 0) return null;
-    return { sets, drawDate, kySo };
-  }
-
-  const selectorMap = {
-    mega: 'span.ball_orange, span.ball.ball_orange',
-    power: 'span.ball_power, span.ball.ball_power',
-    keno: 'span.ball_keno, span.ball.ball_keno',
-    lotto535: 'span.ball_lotto:not(.ball_power2)',
-    max3d: 'span[id^="max3d_G"]',
-  };
-  const selector = selectorMap[product] || 'span[class*="ball"]';
-  const numbers = $(selector)
-    .map((_, el) => parseInt($(el).text().trim(), 10))
-    .get()
-    .filter((n) => !isNaN(n) && n >= 1);
-
-  if (numbers.length === 0) return null;
-
-  let powerNumber = null;
-  if (product === 'lotto535' || product === 'power') {
-    const powerText = $('span.ball_lotto.ball_power2, span.ball.ball_lotto.ball_power2, span.ball_power2, span.ball.ball_power2')
-      .first()
-      .text()
-      .trim();
-    const parsedPower = parseInt(powerText, 10);
-    powerNumber = isNaN(parsedPower) ? null : parsedPower;
-  }
-
-  const maxMap = { keno: 20, lotto535: 5, mega: 6, power: 6 };
-  return {
-    numbers: [...new Set(numbers)].slice(0, maxMap[product] || 6),
-    powerNumber,
-    kySo,
-    drawDate,
-  };
+function parseVietlottByCheerio(_product, _html) {
+  // Parser HTML kiểu ketquadientoan — đã tắt (khôi phục từ git nếu cần).
+  return null;
 }
 
 // Lưu kết quả Vietlott vào Supabase (kyso luôn lưu dạng pad để tra cứu thống nhất)
@@ -1165,7 +562,7 @@ async function getXSKTFromSupabase(dai, drawDate) {
 }
 
 async function scrapeVietlott(product, kyso) {
-  if (!VIETLOTT_PRODUCT_IDS.includes(product) || !VL_URLS[product]) {
+  if (!VIETLOTT_PRODUCT_IDS.includes(product)) {
     throw new Error('Sản phẩm không phải Vietlott hoặc không được hỗ trợ: ' + product);
   }
 
@@ -1211,18 +608,6 @@ async function scrapeVietlott(product, kyso) {
     if (listUrl && !tryUrls.includes(listUrl)) tryUrls.push(listUrl);
   }
 
-  if (VL_URLS[product] && !tryUrls.includes(VL_URLS[product])) {
-    tryUrls.push(VL_URLS[product]);
-  }
-  if (!kyso && info?.currentDate && BASE_URL_MAP[product]) {
-    const parts = info.currentDate.split('/');
-    if (parts.length === 3) {
-      const [dd, mm, yyyy] = parts;
-      const dated = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dd + '-' + mm + '-' + yyyy + '.html';
-      if (!tryUrls.includes(dated)) tryUrls.push(dated);
-    }
-  }
-  if (tryUrls.length === 0 && VL_URLS[product]) tryUrls.push(VL_URLS[product]);
   if (tryUrls.length === 0) throw new Error('Unknown product: ' + product);
 
   let axiosResult = null;
@@ -1237,7 +622,7 @@ async function scrapeVietlott(product, kyso) {
     }
   }
 
-  // Thử axios: lần lượt vietlott → ketquadientoan (theo tryUrls).
+  // Thử axios theo tryUrls (chỉ vietlott.vn; ketquadientoan đã tắt).
   if (axiosResult) {
     if ((product === 'max3d' || product === 'max3dpro') && kyso && !axiosResult.kySo) {
       axiosResult.kySo = kyso;
@@ -1326,7 +711,7 @@ async function scrapeVietlott(product, kyso) {
           const m = allTitleTt[0].textContent.match(/(\d{2})\/(\d{2})\/(\d{4})/);
           if (m) return m[0];
         }
-        return toViDate(new Date());
+        return (() => { const d = new Date(); return String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0') + '/' + d.getFullYear(); })();
       });
 
       const result = { sets, drawDate: drawDate3d, kySo: kySo3d };
@@ -1417,7 +802,7 @@ async function scrapeVietlott(product, kyso) {
         if (m) return m[0];
       }
       const m = document.body.innerText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-      return m ? m[0] : toViDate(new Date());
+      return m ? m[0] : (() => { const d = new Date(); return String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0') + '/' + d.getFullYear(); })();
     });
 
     console.log('[' + product + '] numbers:', numbers, 'kySo:', kySo, 'drawDate:', drawDate);
@@ -1528,6 +913,11 @@ async function backfillVietlottMonthsToSupabase(months, options) {
   for (const product of products) {
     const by = { skipped: 0, fetched: 0, errors: 0, steps: 0, planned: 0 };
     stats.byProduct[product] = by;
+    if (product === 'lotto535') {
+      console.warn('[backfill] lotto535 skipped — use date-based backfill instead');
+      by.skipped++;
+      continue;
+    }
     try {
       const info = await getCurrentInfo(product);
       const cur = parseInt(String(info?.currentKy || '').replace(/\D/g, ''), 10);
@@ -1599,27 +989,7 @@ async function scrapeKenoByKySo(kyso) {
     }
   }
 
-  // Trang live ketquadientoan (nhiều kỳ gần đây).
-  const parsedLive = await scrapeWithAxios(VL_URLS.keno, 'keno', String(kyso));
-  if (parsedLive && Array.isArray(parsedLive.numbers) && parsedLive.numbers.length > 0) {
-    if (!parsedLive.drawDate) parsedLive.drawDate = toViDate(new Date());
-    setCache(cacheKey, parsedLive);
-    return parsedLive;
-  }
-
-  // Fallback: nếu không thấy trên trang live thì thử trang theo ngày, nhưng giới hạn lookback để tránh timeout dài.
-  const directUrl = await findDateUrlByKySo('keno', String(kyso), 5);
-  if (directUrl) {
-    const parsed = await scrapeWithAxios(directUrl, 'keno', String(kyso));
-    if (parsed && Array.isArray(parsed.numbers) && parsed.numbers.length > 0) {
-      if (!parsed.drawDate) {
-        const m = directUrl.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/);
-        if (m) parsed.drawDate = m[1] + '/' + m[2] + '/' + m[3];
-      }
-      setCache(cacheKey, parsed);
-      return parsed;
-    }
-  }
+  // ketquadientoan (live + trang theo ngày): đã tắt — chỉ còn vietlott ở trên.
 
   throw new Error('Không tìm thấy dữ liệu Keno cho kỳ ' + kyso);
 }
@@ -1661,6 +1031,12 @@ function detectRegionByDai(dai) {
 
 function parseAllXSKTByCheerio(html) {
   const $ = cheerio.load(html);
+  const dateRegex = /(\d{2}\/\d{2}\/\d{4})/;
+  const preferredDateText = $('div.ngay, .title_ngay, h2, h3').first().text() || '';
+  const drawDateFromHtml =
+    (preferredDateText.match(dateRegex) || [])[1] ||
+    (($('body').text() || '').match(dateRegex) || [])[1] ||
+    toViDate(new Date());
 
   const normalizePrizeLabel = (raw, cls = '') => {
     const text = String(raw || '').trim().toLowerCase();
@@ -1734,7 +1110,7 @@ function parseAllXSKTByCheerio(html) {
       allResults[daiName] = {
         specialPrize,
         prizes: provincePrizes[i],
-        drawDate: toViDate(new Date()),
+        drawDate: drawDateFromHtml,
       };
     }
   });
@@ -1894,10 +1270,10 @@ app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISO
 
 app.get('/test-connection', async (req, res) => {
   const urls = [
-    'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-lotto-535.html',
+    buildVietlottListingUrl('lotto535') || 'https://vietlott.vn/vi/',
     'https://www.minhngoc.net.vn/',
     'https://xoso.com.vn/',
-  ];
+  ].filter(Boolean);
 
   const results = {};
   for (const url of urls) {
@@ -1917,7 +1293,8 @@ app.get('/test-connection', async (req, res) => {
 
 app.get('/debug-lotto535', async (req, res) => {
   try {
-    const url = 'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-lotto-535.html';
+    const url = buildVietlottListingUrl('lotto535');
+    if (!url) return res.json({ error: 'Không có URL vietlott cho lotto535' });
     const { data: html } = await axios.get(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
       timeout: 15000,
@@ -1951,13 +1328,13 @@ app.get('/debug-resolved-url', async (req, res) => {
     const kyso = String(req.query.kyso || '').trim();
     if (!product) return res.status(400).json({ success: false, error: 'Thiếu product' });
 
-    const supported = Object.keys(VL_URLS);
+    const supported = [...VIETLOTT_PRODUCT_IDS];
     if (!supported.includes(product)) {
       return res.status(400).json({ success: false, error: 'Product không hợp lệ', supported });
     }
 
     const currentInfo = await getCurrentInfo(product);
-    let resolvedUrl = buildVietlottListingUrl(product) || VL_URLS[product];
+    let resolvedUrl = buildVietlottListingUrl(product) || '';
     if (kyso) {
       resolvedUrl = await getUrlFromKySo(product, kyso);
     } else {
@@ -2193,7 +1570,7 @@ app.get('/vietlott/:product', async (req, res) => {
 });
 
 cron.schedule('*/5 16-21 * * *', () => {
-  Object.keys(VL_URLS).forEach((p) => scrapeVietlott(p, null).catch(() => {}));
+  VIETLOTT_PRODUCT_IDS.forEach((p) => scrapeVietlott(p, null).catch(() => {}));
 });
 
 cron.schedule('45 */2 * * *', () => {
