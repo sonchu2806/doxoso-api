@@ -660,7 +660,7 @@ async function scrapeWithAxios(url, product, kysoTarget) {
         return {
           sets: setsArr,
           kySo: kySoParsed || (kysoTarget || ''),
-          drawDate: drawDateParsed || urlDate || new Date().toLocaleDateString('vi-VN'),
+          drawDate: drawDateParsed || urlDate || toViDate(new Date()),
         };
       }
 
@@ -716,7 +716,7 @@ async function scrapeWithAxios(url, product, kysoTarget) {
         return {
           sets: target.sets,
           kySo: target.ky || '',
-          drawDate: target.drawDate || urlDate || new Date().toLocaleDateString('vi-VN'),
+          drawDate: target.drawDate || urlDate || toViDate(new Date()),
         };
       }
 
@@ -819,7 +819,7 @@ async function scrapeWithAxios(url, product, kysoTarget) {
             return {
               sets,
               kySo: kyInChunk || '',
-              drawDate: (dateMatch ? dateMatch[0] : '') || urlDate || new Date().toLocaleDateString('vi-VN'),
+              drawDate: (dateMatch ? dateMatch[0] : '') || urlDate || toViDate(new Date()),
             };
           }
         }
@@ -834,7 +834,7 @@ async function scrapeWithAxios(url, product, kysoTarget) {
       return {
         sets: chosen.sets,
         kySo: chosen.ky || '',
-        drawDate: chosen.drawDate || urlDate || new Date().toLocaleDateString('vi-VN'),
+        drawDate: chosen.drawDate || urlDate || toViDate(new Date()),
       };
     }
 
@@ -881,7 +881,7 @@ async function scrapeWithAxios(url, product, kysoTarget) {
           if (dateMatch) drawDate = dateMatch[0];
           if (kySo) break;
         }
-        if (!drawDate) drawDate = new Date().toLocaleDateString('vi-VN');
+        if (!drawDate) drawDate = toViDate(new Date());
 
         const numbers = [];
         let powerNumber = null;
@@ -1012,7 +1012,7 @@ function parseVietlottByCheerio(product, html) {
     ((titleText.match(/(\d{2})\/(\d{2})\/(\d{4})/) || [])[0]) ||
     ((headerText.match(/(\d{2})\/(\d{2})\/(\d{4})/) || [])[0]) ||
     ((bodyText.match(/(\d{2})\/(\d{2})\/(\d{4})/) || [])[0]) ||
-    new Date().toLocaleDateString('vi-VN');
+    toViDate(new Date());
 
   if (product === 'max3d' || product === 'max3dpro') {
     const groups = {};
@@ -1246,7 +1246,7 @@ async function scrapeVietlott(product, kyso) {
       const m = url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/);
       if (m) axiosResult.drawDate = m[1] + '/' + m[2] + '/' + m[3];
       if (!axiosResult.drawDate && String(url).includes('vietlott.vn')) {
-        axiosResult.drawDate = new Date().toLocaleDateString('vi-VN');
+        axiosResult.drawDate = toViDate(new Date());
       }
     }
     const rowKy = padVietlottId(product, axiosResult.kySo || kyso || '');
@@ -1326,7 +1326,7 @@ async function scrapeVietlott(product, kyso) {
           const m = allTitleTt[0].textContent.match(/(\d{2})\/(\d{2})\/(\d{4})/);
           if (m) return m[0];
         }
-        return new Date().toLocaleDateString('vi-VN');
+        return toViDate(new Date());
       });
 
       const result = { sets, drawDate: drawDate3d, kySo: kySo3d };
@@ -1357,7 +1357,7 @@ async function scrapeVietlott(product, kyso) {
       const result = {
         numbers: [...new Set(numbers)].slice(0, 20),
         kySo: kySoParsed,
-        drawDate: new Date().toLocaleDateString('vi-VN'),
+        drawDate: toViDate(new Date()),
       };
       if (result.numbers.length === 0) throw new Error('Không tìm thấy số kết quả Keno');
       const rk = padVietlottId('keno', result.kySo || kyso || '');
@@ -1417,7 +1417,7 @@ async function scrapeVietlott(product, kyso) {
         if (m) return m[0];
       }
       const m = document.body.innerText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-      return m ? m[0] : new Date().toLocaleDateString('vi-VN');
+      return m ? m[0] : toViDate(new Date());
     });
 
     console.log('[' + product + '] numbers:', numbers, 'kySo:', kySo, 'drawDate:', drawDate);
@@ -1583,7 +1583,7 @@ async function scrapeKenoByKySo(kyso) {
   if (officialUrl) {
     const parsedOfficial = await scrapeWithAxios(officialUrl, 'keno', String(kyso));
     if (parsedOfficial && Array.isArray(parsedOfficial.numbers) && parsedOfficial.numbers.length >= 10) {
-      if (!parsedOfficial.drawDate) parsedOfficial.drawDate = new Date().toLocaleDateString('vi-VN');
+      if (!parsedOfficial.drawDate) parsedOfficial.drawDate = toViDate(new Date());
       setCache(cacheKey, parsedOfficial);
       return parsedOfficial;
     }
@@ -1593,7 +1593,7 @@ async function scrapeKenoByKySo(kyso) {
   if (kenoListUrl) {
     const parsedList = await scrapeWithAxios(kenoListUrl, 'keno', String(kyso));
     if (parsedList && Array.isArray(parsedList.numbers) && parsedList.numbers.length > 0) {
-      if (!parsedList.drawDate) parsedList.drawDate = new Date().toLocaleDateString('vi-VN');
+      if (!parsedList.drawDate) parsedList.drawDate = toViDate(new Date());
       setCache(cacheKey, parsedList);
       return parsedList;
     }
@@ -1602,7 +1602,7 @@ async function scrapeKenoByKySo(kyso) {
   // Trang live ketquadientoan (nhiều kỳ gần đây).
   const parsedLive = await scrapeWithAxios(VL_URLS.keno, 'keno', String(kyso));
   if (parsedLive && Array.isArray(parsedLive.numbers) && parsedLive.numbers.length > 0) {
-    if (!parsedLive.drawDate) parsedLive.drawDate = new Date().toLocaleDateString('vi-VN');
+    if (!parsedLive.drawDate) parsedLive.drawDate = toViDate(new Date());
     setCache(cacheKey, parsedLive);
     return parsedLive;
   }
@@ -1734,7 +1734,7 @@ function parseAllXSKTByCheerio(html) {
       allResults[daiName] = {
         specialPrize,
         prizes: provincePrizes[i],
-        drawDate: new Date().toLocaleDateString('vi-VN'),
+        drawDate: toViDate(new Date()),
       };
     }
   });
@@ -1836,7 +1836,7 @@ async function scrapeAllXSKT(dateStr, region = 'mn') {
           allResults[daiName] = {
             specialPrize,
             prizes: provincePrizes[i],
-            drawDate: new Date().toLocaleDateString('vi-VN'),
+            drawDate: toViDate(new Date()),
           };
         }
       });
@@ -1851,7 +1851,7 @@ async function scrapeAllXSKT(dateStr, region = 'mn') {
 
 async function scrapeXSKT(dai, dateStr, region) {
   const preferredRegion = region || detectRegionByDai(dai);
-  const drawDateKey = dateStr || new Date().toLocaleDateString('vi-VN');
+  const drawDateKey = dateStr || toViDate(new Date());
 
   const sbCached = await getXSKTFromSupabase(dai, drawDateKey);
   if (sbCached) return sbCached;
