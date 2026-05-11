@@ -4,6 +4,11 @@ const puppeteer = require('puppeteer');
 const cron = require('node-cron');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const { createClient } = require('@supabase/supabase-js');
+
+const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY)
+  : null;
 
 const app = express();
 app.use(cors());
@@ -35,6 +40,7 @@ function toSlugDate(d) {
   return dd + '-' + mm + '-' + yyyy;
 }
 
+/** Trực tiếp ketquadientoan — chỉ dùng sau khi đã thử vietlott.vn. */
 const VL_URLS = {
   mega:     'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-mega-6-45.html',
   power:    'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-power-655.html',
@@ -43,6 +49,9 @@ const VL_URLS = {
   max3dpro: 'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-max3d-pro.html',
   lotto535: 'https://www.ketquadientoan.com/truc-tiep-xo-so-dien-toan-lotto-535.html',
 };
+
+/** Chỉ các game Vietlott — mọi logic ưu tiên vietlott.vn / VL_URLS chỉ dùng trong nhánh này, không áp dụng cho XSKT. */
+const VIETLOTT_PRODUCT_IDS = ['mega', 'power', 'max3d', 'max3dpro', 'lotto535', 'keno'];
 
 const BASE_URL_MAP = {
   mega:     'ket-qua-xo-so-dien-toan-mega-6-45',
@@ -61,6 +70,43 @@ const DRAW_DAYS = {
   lotto535: [0,1,2,3,4,5,6],
   keno:     [0,1,2,3,4,5,6],
 };
+
+/** Trang chi tiết kỳ trên vietlott.vn (theo id kỳ). */
+const VIETLOTT_DETAIL_PATHS = {
+  mega:     '/vi/trung-thuong/ket-qua-trung-thuong/645',
+  power:    '/vi/trung-thuong/ket-qua-trung-thuong/655',
+  max3d:    '/vi/trung-thuong/ket-qua-trung-thuong/max-3D',
+  max3dpro: '/vi/trung-thuong/ket-qua-trung-thuong/max-3DPro',
+  lotto535: '/vi/trung-thuong/ket-qua-trung-thuong/535',
+  keno:     '/vi/trung-thuong/ket-qua-trung-thuong/view-detail-keno-result',
+};
+
+function padVietlottId(product, raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (!digits) return '';
+  const n = parseInt(digits, 10);
+  if (Number.isNaN(n)) return '';
+  if (product === 'keno') return String(n).padStart(7, '0');
+  return String(n).padStart(5, '0');
+}
+
+function buildVietlottDetailUrl(product, id) {
+  if (!VIETLOTT_PRODUCT_IDS.includes(product)) return null;
+  const path = VIETLOTT_DETAIL_PATHS[product];
+  if (!path || !id) return null;
+  return 'https://vietlott.vn' + path + '?id=' + encodeURIComponent(String(id)) + '&nocatche=1';
+}
+
+/** Trang kết quả / danh sách trên vietlott (không gắn id kỳ). */
+function buildVietlottListingUrl(product) {
+  if (!VIETLOTT_PRODUCT_IDS.includes(product)) return null;
+  if (product === 'keno') {
+    return 'https://vietlott.vn/vi/trung-thuong/ket-qua-trung-thuong/keno';
+  }
+  const path = VIETLOTT_DETAIL_PATHS[product];
+  if (!path) return null;
+  return 'https://vietlott.vn' + path;
+}
 
 const PRIZE_LABELS = {
   G1: 'Đặc biệt', G2: 'Giải nhất', G3: 'Giải nhì',
@@ -313,12 +359,22 @@ async function findDateUrlByKySo(product, kyso, lookbackDays = 90) {
 
 // Tính URL từ kyso
 async function getUrlFromKySo(product, kyso) {
-  if ((product === 'max3d' || product === 'max3dpro' || product === 'mega' || product === 'power') && kyso) {
-    const info = await getCurrentInfo(product);
-    const currentKyNum = parseInt(info?.currentKy, 10);
-    const targetKyNum = parseInt(kyso, 10);
+  if (!kyso) {
+    if (VIETLOTT_PRODUCT_IDS.includes(product)) {
+      return buildVietlottListingUrl(product) || VL_URLS[product] || '';
+    }
+    return VL_URLS[product] || '';
+  }
 
-    // Fail-fast cho kỳ tương lai hoặc kỳ sai product (vd: lấy kỳ max3d cho max3dpro).
+  if (!VIETLOTT_PRODUCT_IDS.includes(product)) {
+    return VL_URLS[product] || '';
+  }
+
+  if (product === 'max3d' || product === 'max3dpro' || product === 'mega' || product === 'power') {
+    const info = await getCurrentInfo(product);
+    const currentKyNum = parseInt(String(info?.currentKy).replace(/\D/g, ''), 10);
+    const targetKyNum = parseInt(String(kyso).replace(/\D/g, ''), 10);
+
     if (!Number.isNaN(currentKyNum) && !Number.isNaN(targetKyNum) && targetKyNum > currentKyNum) {
       throw new Error(
         'Kỳ ' + kyso + ' vượt kỳ hiện tại #' + String(info.currentKy).padStart(5, '0') + ' của ' + product
@@ -329,82 +385,31 @@ async function getUrlFromKySo(product, kyso) {
       !Number.isNaN(currentKyNum) &&
       !Number.isNaN(targetKyNum)
     ) {
-      const diff = currentKyNum - targetKyNum;
-      // 3D/3DPro chỉ scan lookback ngắn; chặn sớm kỳ quá cũ để tránh timeout.
-      if (diff > 90) {
+      const diffKy = currentKyNum - targetKyNum;
+      if (diffKy > 90) {
         throw new Error(
           'Kỳ ' + kyso + ' quá cũ cho tra cứu nhanh của ' + product + ' (current #' + String(info.currentKy).padStart(5, '0') + ')'
         );
       }
     }
+  }
 
-    let lookbackDays = 70;
-    if (!Number.isNaN(currentKyNum) && !Number.isNaN(targetKyNum) && targetKyNum > 0) {
-      const diff = Math.max(0, currentKyNum - targetKyNum);
-      // 3 kỳ/tuần -> ~2.33 ngày/kỳ. + buffer để tránh lệch lịch/quay bù.
-      const estimatedDays = Math.ceil(diff * 2.5) + 10;
-      lookbackDays = Math.min(120, Math.max(14, estimatedDays));
-    }
-
-    const directUrl = await findDateUrlByKySo(product, kyso, lookbackDays);
-    if (directUrl) {
-      console.log('[getUrlFromKySo direct] ' + product + ' kyso=' + kyso + ' → ' + directUrl);
-      return directUrl;
-    }
-    if (product === 'max3d' || product === 'max3dpro') {
-      throw new Error('Không tìm thấy URL theo kỳ cho ' + product + ' kỳ ' + kyso);
+  if (product === 'keno') {
+    const info = await getCurrentInfo('keno');
+    const cur = parseInt(String(info?.currentKy).replace(/\D/g, ''), 10);
+    const target = parseInt(String(kyso).replace(/\D/g, ''), 10);
+    if (!Number.isNaN(cur) && !Number.isNaN(target) && target > cur) {
+      throw new Error(
+        'Kỳ ' + kyso + ' vượt kỳ hiện tại #' + String(info.currentKy).padStart(7, '0') + ' của keno'
+      );
     }
   }
 
-  const info = await getCurrentInfo(product);
-  if (!info.currentKy || !info.currentDate) return VL_URLS[product];
-
-  const currentKyNum = parseInt(info.currentKy);
-  const targetKyNum = parseInt(kyso);
-  const diff = currentKyNum - targetKyNum;
-  if (diff <= 0) return VL_URLS[product]; // kỳ hiện tại
-
-  const drawDays = DRAW_DAYS[product] || [0,1,2,3,4,5,6];
-  const [dd, mm, yyyy] = info.currentDate.split('/');
-
-  if (product === 'lotto535') {
-    // Lotto535: 2 kỳ/ngày
-    // Tính ngày từ diff: mỗi 2 kỳ = 1 ngày
-    // Kỳ chẵn (00622, 00624...) = kỳ 21h
-    // Kỳ lẻ (00621, 00623...) = kỳ 13h
-
-    // currentKy là kỳ mới nhất đã quay hôm nay
-    // Tính số ngày lùi:
-    const daysBack = Math.ceil(diff / 2);
-
-    let current = new Date(parseInt(yyyy), parseInt(mm)-1, parseInt(dd));
-    current.setDate(current.getDate() - daysBack + 1);
-
-    // Nếu target là kỳ lẻ (13h) trong ngày đó → dùng ngày đó
-    // Nếu target là kỳ chẵn (21h) → cũng dùng ngày đó
-    // Cả 2 kỳ trong 1 ngày đều nằm trong cùng 1 URL
-
-    const newDd = String(current.getDate()).padStart(2, '0');
-    const newMm = String(current.getMonth() + 1).padStart(2, '0');
-    const newYyyy = current.getFullYear();
-    const dateStr = newDd + '-' + newMm + '-' + newYyyy;
-    const url = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dateStr + '.html';
-    console.log('[lotto535] target=' + kyso + ' current=' + info.currentKy + '/' + info.currentDate + ' diff=' + diff + ' daysBack=' + daysBack + ' url=' + url);
-    return url;
-  }
-
-  // Các sản phẩm khác giữ nguyên logic cũ
-  let current = new Date(parseInt(yyyy), parseInt(mm)-1, parseInt(dd));
-  let count = 0;
-  while (count < diff) {
-    current.setDate(current.getDate() - 1);
-    if (drawDays.includes(current.getDay())) count++;
-  }
-  const newDd = String(current.getDate()).padStart(2, '0');
-  const newMm = String(current.getMonth() + 1).padStart(2, '0');
-  const newYyyy = current.getFullYear();
-  const dateStr = newDd + '-' + newMm + '-' + newYyyy;
-  return 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dateStr + '.html';
+  const idStr = padVietlottId(product, kyso);
+  const url = buildVietlottDetailUrl(product, idStr);
+  if (!url) throw new Error('Không tạo được URL Vietlott cho ' + product);
+  console.log('[getUrlFromKySo vietlott] ' + product + ' kyso=' + kyso + ' -> ' + url);
+  return url;
 }
 
 async function fetchHTML(url) {
@@ -423,17 +428,171 @@ async function fetchHTML(url) {
   }
 }
 
+function extractKyAndDateFromText(blob) {
+  const text = String(blob || '').replace(/\s+/g, ' ');
+  const kySo = (text.match(/#\s*(\d+)/) || [])[1] || '';
+  const drawDate = (text.match(/(\d{2}\/\d{2}\/\d{4})/) || [])[1] || '';
+  return { kySo, drawDate };
+}
+
+function parseOfficialMax3DFromVietlott($, isPro) {
+  const wrap = isPro ? $('#divMax3DProPlus') : $('#divMax3D');
+  const table = wrap.find('table.table-hover').first();
+  if (!table.length) return null;
+  const sets = [];
+  const seenRowSig = new Set();
+  table.find('tbody tr').each((_, tr) => {
+    const tds = $(tr).find('td');
+    if (tds.length < 2) return;
+    const labelText = tds.eq(0).text().replace(/\s+/g, ' ').trim().toLowerCase();
+    let base = '';
+    if (labelText.includes('đặc biệt')) base = 'Đặc biệt';
+    else if (labelText.includes('nhất')) base = 'Giải nhất';
+    else if (labelText.includes('nhì')) base = 'Giải nhì';
+    else if (labelText.includes('ba')) base = 'Giải ba';
+    else return;
+    const cell = tds.eq(1);
+    const parts = [];
+    cell.find('span.red').each((_, sp) => {
+      const w = $(sp).text().trim();
+      if (/^\d{3}$/.test(w)) parts.push(w);
+    });
+    if (parts.length === 0) {
+      cell.find('span').each((_, sp) => {
+        const w = $(sp).text().trim();
+        if (/^\d{3}$/.test(w)) parts.push(w);
+      });
+    }
+    if (parts.length === 0) {
+      const raw = cell.text().replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+      const m = raw.match(/\d{3}/g);
+      if (m) parts.push(...m);
+    }
+    const rowSig = base + '|' + parts.slice().sort().join(',');
+    if (seenRowSig.has(rowSig)) return;
+    seenRowSig.add(rowSig);
+    parts.forEach((w, idx) => {
+      sets.push({
+        label: base + ' bộ ' + (idx + 1),
+        numbers: w.split('').map((c) => parseInt(c, 10)),
+      });
+    });
+  });
+  if (sets.length === 0) return null;
+  const blob = wrap.text() + ' ' + $('body').text();
+  const { kySo, drawDate } = extractKyAndDateFromText(blob);
+  return { sets, kySo, drawDate };
+}
+
+function parseOfficialMegaPowerL535FromVietlott($, product) {
+  const left = $('#divLeftContent');
+  const area = left.length ? left : $('body');
+  const box = area.find('div.day_so_ket_qua_v2').first();
+  if (!box.length) return null;
+  const main = [];
+  let powerNumber = null;
+  box.find('span.bong_tron').each((_, el) => {
+    const $el = $(el);
+    const cls = $el.attr('class') || '';
+    const t = parseInt($el.text().trim(), 10);
+    if (Number.isNaN(t)) return;
+    if (cls.includes('active')) powerNumber = t;
+    else main.push(t);
+  });
+  const blob = area.text();
+  let { kySo, drawDate } = extractKyAndDateFromText(blob);
+
+  if (product === 'mega') {
+    if (main.length === 6 && powerNumber === null) {
+      return { numbers: main, powerNumber: null, kySo, drawDate };
+    }
+    return null;
+  }
+  if (product === 'power') {
+    const nums = [...main];
+    if (powerNumber === null && nums.length === 7) powerNumber = nums.pop();
+    if (nums.length === 6 && powerNumber !== null) {
+      return { numbers: nums, powerNumber, kySo, drawDate };
+    }
+    return null;
+  }
+  if (product === 'lotto535') {
+    const nums = [...main];
+    if (powerNumber === null && nums.length === 6) powerNumber = nums.pop();
+    if (nums.length === 5 && powerNumber !== null) {
+      return { numbers: nums, powerNumber, kySo, drawDate };
+    }
+    return null;
+  }
+  return null;
+}
+
+function parseOfficialKenoFromVietlott($, kysoTarget) {
+  let row = null;
+  $('table tbody tr').each((_, tr) => {
+    const tds = $(tr).find('td');
+    if (tds.length < 3) return;
+    const nBong = tds.eq(2).find('span.bong_tron').length;
+    if (nBong >= 10) {
+      row = tr;
+      return false;
+    }
+  });
+  if (!row) return null;
+  const tds = $(row).find('td');
+  const drawDate = (tds.eq(0).text().match(/\d{2}\/\d{2}\/\d{4}/) || [])[0] || '';
+  const kyCell = tds.eq(1).text();
+  let kySo = (kyCell.match(/#\s*(\d+)/) || [])[1] || '';
+  if (!kySo) kySo = (kyCell.match(/(\d{6,})/) || [])[1] || '';
+  const cellForNums = tds.length >= 3 ? tds.eq(2) : $(row);
+  const nums = [];
+  cellForNums.find('span.bong_tron').each((_, el) => {
+    const n = parseInt($(el).text().trim(), 10);
+    if (!Number.isNaN(n) && n >= 1 && n <= 80) nums.push(n);
+  });
+  const unique = [...new Set(nums)].slice(0, 20);
+  if (unique.length < 10) return null;
+  if (!kySo && kysoTarget) kySo = String(kysoTarget).replace(/\D/g, '');
+  return { numbers: unique, powerNumber: null, kySo, drawDate };
+}
+
+function parseVietlottOfficialHtml($, product, kysoTarget) {
+  try {
+    if (product === 'max3d') return parseOfficialMax3DFromVietlott($, false);
+    if (product === 'max3dpro') return parseOfficialMax3DFromVietlott($, true);
+    if (product === 'keno') return parseOfficialKenoFromVietlott($, kysoTarget);
+    if (product === 'mega' || product === 'power' || product === 'lotto535') {
+      return parseOfficialMegaPowerL535FromVietlott($, product);
+    }
+  } catch (e) {
+    console.log('[parseVietlottOfficialHtml]', e.message);
+  }
+  return null;
+}
+
 async function scrapeWithAxios(url, product, kysoTarget) {
   try {
+    const isVietlott = String(url).includes('vietlott.vn');
     const { data: html } = await axios.get(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept-Language': 'vi-VN,vi;q=0.9',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.8',
       },
-      timeout: 15000,
+      timeout: isVietlott ? 20000 : 15000,
     });
 
     const $ = cheerio.load(html);
+
+    if (isVietlott) {
+      const offic = parseVietlottOfficialHtml($, product, kysoTarget);
+      if (offic) return offic;
+      if (['mega', 'power', 'max3d', 'max3dpro', 'lotto535', 'keno'].includes(product)) {
+        console.log('[scrapeWithAxios] vietlott.vn parse failed', product);
+        return null;
+      }
+    }
 
     // MAX 3D
     if (product === 'max3d' || product === 'max3dpro') {
@@ -769,6 +928,33 @@ async function scrapeWithAxios(url, product, kysoTarget) {
       };
     }
 
+    // KENO (hỗ trợ chọn kỳ quá khứ theo trang kết quả ngày)
+    if (product === 'keno' && kysoTarget) {
+      const normalizedKy = String(kysoTarget).replace(/^0+/, '');
+      const htmlNorm = String(html || '').replace(/#0+/g, '#');
+      const idx = htmlNorm.indexOf('#' + normalizedKy);
+      if (idx >= 0) {
+        const start = Math.max(0, idx - 6000);
+        const chunk = htmlNorm.slice(start, idx + 40000);
+        const $$ = cheerio.load(chunk);
+        const nums = $$('span.ball_keno, span.ball.ball_keno, span[class*="ball_keno"]')
+          .map((_, el) => parseInt($$(el).text().trim(), 10))
+          .get()
+          .filter((n) => !Number.isNaN(n) && n >= 1);
+        const unique = [...new Set(nums)].slice(0, 20);
+        if (unique.length >= 10) {
+          const drawDate = (chunk.match(/(\d{2})\/(\d{2})\/(\d{4})/) || [])[0] || '';
+          return {
+            numbers: unique,
+            powerNumber: null,
+            kySo: String(kysoTarget),
+            drawDate,
+          };
+        }
+      }
+      return null;
+    }
+
     // MEGA, POWER, KENO
     const selectorMap = {
       mega:     'span.ball_orange, span.ball.ball_orange',
@@ -887,30 +1073,171 @@ function parseVietlottByCheerio(product, html) {
   };
 }
 
+// Lưu kết quả Vietlott vào Supabase (kyso luôn lưu dạng pad để tra cứu thống nhất)
+async function saveVietlottToSupabase(product, kyso, data) {
+  if (!supabase) return;
+  const key = padVietlottId(product, kyso || data.kySo || '');
+  if (!key) return;
+  try {
+    await supabase.from('vietlott_results').upsert({
+      product,
+      kyso: key,
+      draw_date: data.drawDate || '',
+      numbers: data.numbers || [],
+      power_number: data.powerNumber || null,
+      sets: data.sets || null,
+    }, { onConflict: 'product,kyso' });
+    console.log('[supabase] saved vietlott', product, key);
+  } catch (e) {
+    console.error('[supabase] save error:', e.message);
+  }
+}
+
+// Lấy kết quả Vietlott từ Supabase (thử cả kyso gốc và bản pad)
+async function getVietlottFromSupabase(product, kyso) {
+  if (!supabase || !kyso) return null;
+  const raw = String(kyso).trim();
+  if (!raw) return null;
+  const padded = padVietlottId(product, raw);
+  const keysTry = padded && padded !== raw ? [padded, raw] : [padded || raw];
+  const keys = [...new Set(keysTry.filter(Boolean))];
+  for (const k of keys) {
+    try {
+      const { data, error } = await supabase
+        .from('vietlott_results')
+        .select('*')
+        .eq('product', product)
+        .eq('kyso', k)
+        .limit(1)
+        .maybeSingle();
+      if (error || !data) continue;
+      console.log('[supabase] cache hit', product, k);
+      return {
+        numbers: data.numbers,
+        powerNumber: data.power_number,
+        sets: data.sets,
+        kySo: data.kyso,
+        drawDate: data.draw_date,
+      };
+    } catch (_e) {
+      // thử khóa kỳ khác
+    }
+  }
+  return null;
+}
+
+// Lưu kết quả XSKT vào Supabase
+async function saveXSKTToSupabase(dai, drawDate, data) {
+  if (!supabase) return;
+  try {
+    await supabase.from('xskt_results').upsert({
+      dai,
+      draw_date: drawDate,
+      special_prize: data.specialPrize || '',
+      prizes: data.prizes || [],
+    }, { onConflict: 'dai,draw_date' });
+    console.log('[supabase] saved xskt', dai, drawDate);
+  } catch (e) {
+    console.error('[supabase] save xskt error:', e.message);
+  }
+}
+
+// Lấy kết quả XSKT từ Supabase
+async function getXSKTFromSupabase(dai, drawDate) {
+  if (!supabase || !drawDate) return null;
+  try {
+    const { data, error } = await supabase
+      .from('xskt_results')
+      .select('*')
+      .eq('dai', dai)
+      .eq('draw_date', drawDate)
+      .single();
+    if (error || !data) return null;
+    console.log('[supabase] cache hit xskt', dai, drawDate);
+    return {
+      specialPrize: data.special_prize,
+      prizes: data.prizes,
+      drawDate: data.draw_date,
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
 async function scrapeVietlott(product, kyso) {
+  if (!VIETLOTT_PRODUCT_IDS.includes(product) || !VL_URLS[product]) {
+    throw new Error('Sản phẩm không phải Vietlott hoặc không được hỗ trợ: ' + product);
+  }
+
   const cacheKey = 'vl_' + product + (kyso ? '_' + kyso : '');
   const cached = getCache(cacheKey);
   if (cached) return cached;
 
-  let url = '';
-  if (kyso) {
-    url = await getUrlFromKySo(product, kyso);
-  } else if (product === 'mega' || product === 'power' || product === 'max3d' || product === 'max3dpro') {
-    // Ưu tiên trang theo ngày kỳ đã mở thay vì trang trực tiếp.
-    const info = await getCurrentInfo(product);
-    if (info?.currentDate) {
-      const [dd, mm, yyyy] = info.currentDate.split('/');
-      url = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dd + '-' + mm + '-' + yyyy + '.html';
-    } else {
-      url = VL_URLS[product];
+  let info = null;
+  if (!kyso) {
+    info = await getCurrentInfo(product);
+    const curId =
+      info?.currentKy != null && String(info.currentKy).trim() !== ''
+        ? padVietlottId(product, info.currentKy)
+        : '';
+    if (curId) {
+      const sbData = await getVietlottFromSupabase(product, curId);
+      if (sbData) {
+        setCache(cacheKey, sbData);
+        return sbData;
+      }
     }
   } else {
-    url = VL_URLS[product];
+    const sbData = await getVietlottFromSupabase(product, kyso);
+    if (sbData) {
+      setCache(cacheKey, sbData);
+      return sbData;
+    }
   }
-  if (!url) throw new Error('Unknown product: ' + product);
 
-  // Thử axios trước
-  const axiosResult = await scrapeWithAxios(url, product, kyso);
+  const tryUrls = [];
+
+  if (kyso) {
+    const u = await getUrlFromKySo(product, kyso);
+    if (u) tryUrls.push(u);
+  } else {
+    const id =
+      info?.currentKy != null && String(info.currentKy).trim() !== ''
+        ? padVietlottId(product, info.currentKy)
+        : '';
+    const detailUrl = id ? buildVietlottDetailUrl(product, id) : null;
+    if (detailUrl) tryUrls.push(detailUrl);
+    const listUrl = buildVietlottListingUrl(product);
+    if (listUrl && !tryUrls.includes(listUrl)) tryUrls.push(listUrl);
+  }
+
+  if (VL_URLS[product] && !tryUrls.includes(VL_URLS[product])) {
+    tryUrls.push(VL_URLS[product]);
+  }
+  if (!kyso && info?.currentDate && BASE_URL_MAP[product]) {
+    const parts = info.currentDate.split('/');
+    if (parts.length === 3) {
+      const [dd, mm, yyyy] = parts;
+      const dated = 'https://www.ketquadientoan.com/' + BASE_URL_MAP[product] + '/' + dd + '-' + mm + '-' + yyyy + '.html';
+      if (!tryUrls.includes(dated)) tryUrls.push(dated);
+    }
+  }
+  if (tryUrls.length === 0 && VL_URLS[product]) tryUrls.push(VL_URLS[product]);
+  if (tryUrls.length === 0) throw new Error('Unknown product: ' + product);
+
+  let axiosResult = null;
+  let url = tryUrls[0];
+  for (const u of tryUrls) {
+    if (!u) continue;
+    const r = await scrapeWithAxios(u, product, kyso);
+    if (r) {
+      axiosResult = r;
+      url = u;
+      break;
+    }
+  }
+
+  // Thử axios: lần lượt vietlott → ketquadientoan (theo tryUrls).
   if (axiosResult) {
     if ((product === 'max3d' || product === 'max3dpro') && kyso && !axiosResult.kySo) {
       axiosResult.kySo = kyso;
@@ -918,9 +1245,15 @@ async function scrapeVietlott(product, kyso) {
     if ((product === 'max3d' || product === 'max3dpro') && !axiosResult.drawDate) {
       const m = url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/);
       if (m) axiosResult.drawDate = m[1] + '/' + m[2] + '/' + m[3];
+      if (!axiosResult.drawDate && String(url).includes('vietlott.vn')) {
+        axiosResult.drawDate = new Date().toLocaleDateString('vi-VN');
+      }
     }
+    const rowKy = padVietlottId(product, axiosResult.kySo || kyso || '');
+    if (rowKy) axiosResult.kySo = rowKy;
     console.log('[' + product + '] axios success');
     setCache(cacheKey, axiosResult);
+    await saveVietlottToSupabase(product, rowKy || axiosResult.kySo || kyso, axiosResult);
     return axiosResult;
   }
   if (product === 'mega') {
@@ -934,7 +1267,20 @@ async function scrapeVietlott(product, kyso) {
   return withBrowser(async (browser) => {
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+    let opened = false;
+    let gotoErr = null;
+    for (const u of tryUrls) {
+      if (!u) continue;
+      try {
+        await page.goto(u, { waitUntil: 'networkidle2', timeout: 60000 });
+        url = u;
+        opened = true;
+        break;
+      } catch (e) {
+        gotoErr = e;
+      }
+    }
+    if (!opened) throw gotoErr || new Error('Không mở được trang kết quả');
     await new Promise(r => setTimeout(r, 5000));
 
     // MAX 3D / MAX 3D PRO
@@ -989,7 +1335,10 @@ async function scrapeVietlott(product, kyso) {
         const m = url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/);
         if (m) result.drawDate = m[1] + '/' + m[2] + '/' + m[3];
       }
+      const rk = padVietlottId(product, result.kySo || kyso || '');
+      if (rk) result.kySo = rk;
       setCache(cacheKey, result);
+      await saveVietlottToSupabase(product, rk || result.kySo || kyso, result);
       return result;
     }
 
@@ -1011,7 +1360,10 @@ async function scrapeVietlott(product, kyso) {
         drawDate: new Date().toLocaleDateString('vi-VN'),
       };
       if (result.numbers.length === 0) throw new Error('Không tìm thấy số kết quả Keno');
+      const rk = padVietlottId('keno', result.kySo || kyso || '');
+      if (rk) result.kySo = rk;
       setCache(cacheKey, result);
+      await saveVietlottToSupabase('keno', rk || result.kySo || kyso, result);
       return result;
     }
 
@@ -1089,9 +1441,52 @@ async function scrapeVietlott(product, kyso) {
       }
       throw new Error(kyso ? `Không tìm thấy kết quả cho kỳ ${kyso}` : 'Không tìm thấy số kết quả');
     }
+    const rk = padVietlottId(product, result.kySo || kyso || '');
+    if (rk) result.kySo = rk;
     setCache(cacheKey, result);
+    await saveVietlottToSupabase(product, rk || result.kySo || kyso, result);
     return result;
   });
+}
+
+/**
+ * Gọi scrape theo từng kỳ gần đây để upsert vào Supabase (bỏ qua kỳ đã có đủ dữ liệu).
+ * VIETLOTT_WARM_DEPTH (mặc định 10), VIETLOTT_WARM_DELAY_MS (mặc định 500),
+ * VIETLOTT_WARM_ON_BOOT=0 để tắt warm lúc khởi động.
+ */
+async function warmVietlottRecentToSupabase() {
+  if (!supabase) {
+    console.log('[warm vietlott] Bỏ qua — chưa cấu hình SUPABASE_URL / SUPABASE_ANON_KEY');
+    return;
+  }
+  const depth = Math.max(1, Math.min(40, parseInt(process.env.VIETLOTT_WARM_DEPTH || '10', 10)));
+  const delayMs = Math.max(200, Math.min(3000, parseInt(process.env.VIETLOTT_WARM_DELAY_MS || '500', 10)));
+
+  for (const product of VIETLOTT_PRODUCT_IDS) {
+    try {
+      const info = await getCurrentInfo(product);
+      const cur = parseInt(String(info?.currentKy || '').replace(/\D/g, ''), 10);
+      if (Number.isNaN(cur) || cur < 1) continue;
+
+      const maxBack = product === 'keno' ? Math.min(depth, 12) : depth;
+      for (let i = 0; i < maxBack; i++) {
+        const n = cur - i;
+        if (n < 1) break;
+        const kyStr = padVietlottId(product, n);
+        const had = await getVietlottFromSupabase(product, kyStr);
+        const filled =
+          had &&
+          ((Array.isArray(had.numbers) && had.numbers.length > 0) ||
+            (Array.isArray(had.sets) && had.sets.length > 0));
+        if (filled) continue;
+        await scrapeVietlott(product, kyStr).catch(() => {});
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    } catch (e) {
+      console.warn('[warm vietlott]', product, e.message);
+    }
+  }
+  console.log('[warm vietlott] Hoàn tất một vòng');
 }
 
 // Scrape Keno theo kyso — dùng trang tra cứu
@@ -1100,62 +1495,49 @@ async function scrapeKenoByKySo(kyso) {
   const cached = getCache(cacheKey);
   if (cached) return cached;
 
-  return withBrowser(async (browser) => {
-    const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-    // Trang tra cứu Keno có form search theo kỳ
-    await page.goto('https://www.ketquadientoan.com/ket-qua-xo-so-dien-toan-keno.html', {
-      waitUntil: 'networkidle2', timeout: 60000,
-    });
-    await new Promise(r => setTimeout(r, 3000));
-
-    // Nhập kỳ số vào form search
-    await page.evaluate((ky) => {
-      const input = document.querySelector('input[name="kyso"], input#kyso, input.kyso');
-      if (input) { input.value = ky; input.dispatchEvent(new Event('change')); }
-    }, kyso);
-
-    // Submit form
-    await page.evaluate(() => {
-      const btn = document.querySelector('button[type="submit"], input[type="submit"], .btn-search, .btn-timkiem');
-      if (btn) btn.click();
-    });
-
-    await new Promise(r => setTimeout(r, 3000));
-
-    const data = await page.evaluate(() => {
-      // Tìm row có kỳ số matching trong bảng kết quả
-      const rows = document.querySelectorAll('tr, .row-keno, .keno-row');
-      const results = [];
-      rows.forEach(row => {
-        const kyEl = row.querySelector('.ky-xo, td:first-child, [class*="ky"]');
-        const balls = row.querySelectorAll('span.ball_keno, span[class*="ball"]');
-        if (balls.length >= 10) {
-          results.push({
-            ky: kyEl ? kyEl.textContent.trim() : '',
-            numbers: Array.from(balls).map(b => parseInt(b.textContent.trim())).filter(n => !isNaN(n)),
-          });
-        }
-      });
-      return results.slice(0, 5);
-    });
-
-    console.log('[keno kyso=' + kyso + '] data:', JSON.stringify(data));
-
-    // Tìm kỳ matching
-    const matched = data.find(r => r.ky.includes(kyso));
-    if (!matched || matched.numbers.length === 0) {
-      throw new Error('Không tìm thấy kỳ Keno ' + kyso);
+  const officialUrl = buildVietlottDetailUrl('keno', padVietlottId('keno', kyso));
+  if (officialUrl) {
+    const parsedOfficial = await scrapeWithAxios(officialUrl, 'keno', String(kyso));
+    if (parsedOfficial && Array.isArray(parsedOfficial.numbers) && parsedOfficial.numbers.length >= 10) {
+      if (!parsedOfficial.drawDate) parsedOfficial.drawDate = new Date().toLocaleDateString('vi-VN');
+      setCache(cacheKey, parsedOfficial);
+      return parsedOfficial;
     }
+  }
 
-    const result = {
-      numbers: matched.numbers.slice(0, 20),
-      kySo: kyso,
-      drawDate: new Date().toLocaleDateString('vi-VN'),
-    };
-    setCache(cacheKey, result);
-    return result;
-  });
+  const kenoListUrl = buildVietlottListingUrl('keno');
+  if (kenoListUrl) {
+    const parsedList = await scrapeWithAxios(kenoListUrl, 'keno', String(kyso));
+    if (parsedList && Array.isArray(parsedList.numbers) && parsedList.numbers.length > 0) {
+      if (!parsedList.drawDate) parsedList.drawDate = new Date().toLocaleDateString('vi-VN');
+      setCache(cacheKey, parsedList);
+      return parsedList;
+    }
+  }
+
+  // Trang live ketquadientoan (nhiều kỳ gần đây).
+  const parsedLive = await scrapeWithAxios(VL_URLS.keno, 'keno', String(kyso));
+  if (parsedLive && Array.isArray(parsedLive.numbers) && parsedLive.numbers.length > 0) {
+    if (!parsedLive.drawDate) parsedLive.drawDate = new Date().toLocaleDateString('vi-VN');
+    setCache(cacheKey, parsedLive);
+    return parsedLive;
+  }
+
+  // Fallback: nếu không thấy trên trang live thì thử trang theo ngày, nhưng giới hạn lookback để tránh timeout dài.
+  const directUrl = await findDateUrlByKySo('keno', String(kyso), 5);
+  if (directUrl) {
+    const parsed = await scrapeWithAxios(directUrl, 'keno', String(kyso));
+    if (parsed && Array.isArray(parsed.numbers) && parsed.numbers.length > 0) {
+      if (!parsed.drawDate) {
+        const m = directUrl.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/);
+        if (m) parsed.drawDate = m[1] + '/' + m[2] + '/' + m[3];
+      }
+      setCache(cacheKey, parsed);
+      return parsed;
+    }
+  }
+
+  throw new Error('Không tìm thấy dữ liệu Keno cho kỳ ' + kyso);
 }
 
 const XSKT_REGIONS = {
@@ -1385,6 +1767,11 @@ async function scrapeAllXSKT(dateStr, region = 'mn') {
 
 async function scrapeXSKT(dai, dateStr, region) {
   const preferredRegion = region || detectRegionByDai(dai);
+  const drawDateKey = dateStr || new Date().toLocaleDateString('vi-VN');
+
+  const sbCached = await getXSKTFromSupabase(dai, drawDateKey);
+  if (sbCached) return sbCached;
+
   let allResults = await scrapeAllXSKT(dateStr, preferredRegion);
   const keys = Object.keys(allResults);
 
@@ -1395,19 +1782,24 @@ async function scrapeXSKT(dai, dateStr, region) {
       .replace(/\s+/g, ' ').trim();
   }
 
+  async function finishAndSave(data) {
+    await saveXSKTToSupabase(dai, data.drawDate || drawDateKey, data);
+    return data;
+  }
+
   const normDai = norm(dai);
-  if (allResults[dai]) return allResults[dai];
+  if (allResults[dai]) return await finishAndSave(allResults[dai]);
   let found = keys.find(k => norm(k) === normDai || norm(k).includes(normDai) || normDai.includes(norm(k)));
-  if (found) return allResults[found];
+  if (found) return await finishAndSave(allResults[found]);
 
   // Fallback: thử các miền còn lại nếu không match ở miền ưu tiên
   for (const r of ['mb', 'mt', 'mn']) {
     if (r === preferredRegion) continue;
     allResults = await scrapeAllXSKT(dateStr, r);
     const otherKeys = Object.keys(allResults);
-    if (allResults[dai]) return allResults[dai];
+    if (allResults[dai]) return await finishAndSave(allResults[dai]);
     found = otherKeys.find(k => norm(k) === normDai || norm(k).includes(normDai) || normDai.includes(norm(k)));
-    if (found) return allResults[found];
+    if (found) return await finishAndSave(allResults[found]);
   }
 
   console.warn('[XSKT] Không tìm thấy:', dai, '| Có:', keys);
@@ -1481,7 +1873,16 @@ app.get('/debug-resolved-url', async (req, res) => {
     }
 
     const currentInfo = await getCurrentInfo(product);
-    const resolvedUrl = kyso ? await getUrlFromKySo(product, kyso) : VL_URLS[product];
+    let resolvedUrl = buildVietlottListingUrl(product) || VL_URLS[product];
+    if (kyso) {
+      resolvedUrl = await getUrlFromKySo(product, kyso);
+    } else {
+      if (VIETLOTT_PRODUCT_IDS.includes(product) && currentInfo?.currentKy != null && String(currentInfo.currentKy).trim() !== '') {
+        const id = padVietlottId(product, currentInfo.currentKy);
+        const u = buildVietlottDetailUrl(product, id);
+        if (u) resolvedUrl = u;
+      }
+    }
 
     res.json({
       success: true,
@@ -1521,7 +1922,7 @@ app.get('/vietlott/keno/by-kyso', async (req, res) => {
   const { kyso } = req.query;
   if (!kyso) return res.status(400).json({ success: false, error: 'Thiếu kyso' });
   try {
-    const result = await scrapeKenoByKySo(kyso);
+    const result = await scrapeVietlott('keno', kyso);
     res.json({ success: true, data: result });
   } catch(e) {
     res.status(500).json({ success: false, error: e.message });
@@ -1584,8 +1985,19 @@ app.get('/vietlott/:product', async (req, res) => {
 });
 
 cron.schedule('*/5 16-21 * * *', () => {
-  Object.keys(VL_URLS).forEach(p => scrapeVietlott(p, null).catch(() => {}));
+  Object.keys(VL_URLS).forEach((p) => scrapeVietlott(p, null).catch(() => {}));
 });
+
+cron.schedule('45 */2 * * *', () => {
+  warmVietlottRecentToSupabase().catch((e) => console.warn('[warm vietlott cron]', e.message));
+});
+
+if (process.env.VIETLOTT_WARM_ON_BOOT !== '0') {
+  const bootMs = Math.max(5000, parseInt(process.env.VIETLOTT_WARM_BOOT_DELAY_MS || '25000', 10));
+  setTimeout(() => {
+    warmVietlottRecentToSupabase().catch((e) => console.warn('[warm vietlott boot]', e.message));
+  }, bootMs);
+}
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => {
