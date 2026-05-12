@@ -2106,6 +2106,31 @@ app.get('/debug-vietlott-html', async (req, res) => {
   }
 });
 
+app.get('/debug-fetch-raw', async (req, res) => {
+  const url = String(
+    req.query.url ||
+      'https://vietlott.vn/vi/trung-thuong/ket-qua-trung-thuong/645?id=01508&nocatche=1'
+  );
+  try {
+    const { data, status } = await axios.get(url, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'vi-VN,vi;q=0.9',
+      },
+      timeout: 20000,
+      validateStatus: () => true,
+    });
+    res.json({
+      status,
+      htmlLen: String(data).length,
+      snippet: String(data).slice(0, 300),
+    });
+  } catch (e) {
+    res.json({ error: e.message, code: e.code });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => {
   console.log('✅ Doxoso API server chạy tại http://localhost:' + PORT);
