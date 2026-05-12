@@ -10,6 +10,8 @@ const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY
   ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY)
   : null;
 
+const VIETLOTT_PROXY = process.env.VIETLOTT_PROXY_URL || '';
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -662,7 +664,11 @@ async function scrapeWithAxios(url, product, kysoTarget) {
     const u = String(url);
     if (!u.includes('vietlott.vn')) return null;
 
-    const { data: html } = await axios.get(u, {
+    const fetchUrl =
+      VIETLOTT_PROXY && u.includes('vietlott.vn')
+        ? VIETLOTT_PROXY + '?url=' + encodeURIComponent(u)
+        : u;
+    const { data: html } = await axios.get(fetchUrl, {
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
