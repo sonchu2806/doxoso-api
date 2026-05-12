@@ -84,7 +84,7 @@ function buildVietlottDetailUrl(product, id) {
 function buildVietlottListingUrl(product) {
   if (!VIETLOTT_PRODUCT_IDS.includes(product)) return null;
   if (product === 'keno') {
-    return 'https://vietlott.vn/vi/trung-thuong/ket-qua-trung-thuong/keno';
+    return 'https://vietlott.vn/vi/trung-thuong/ket-qua-trung-thuong/winning-number-keno';
   }
   const path = VIETLOTT_DETAIL_PATHS[product];
   if (!path) return null;
@@ -106,27 +106,36 @@ async function withBrowser(fn) {
   }
 
   activeBrowsers++;
+  const baseArgs = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--ignore-certificate-errors',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--disable-gpu-sandbox',
+    '--no-first-run',
+    '--disable-extensions',
+  ];
+  // --single-process / --no-zygote: hay cần trên Docker Linux tối RAM, nhưng trên Windows thường gây
+  // "Cannot use V8 Proxy resolver in single process mode" + lỗi GPU → mặc định TẮT.
+  if (process.env.PUPPETEER_USE_SINGLE_PROCESS === '1') {
+    baseArgs.push('--no-zygote', '--single-process');
+  }
   const browser = await puppeteer.launch({
     headless: 'new',
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--ignore-certificate-errors',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-first-run',
-      '--no-zygote',
-      '--single-process',
-      '--disable-extensions',
-    ],
+    args: baseArgs,
   });
 
-  // Auto-kill browser sau 60 giây
+  // Tránh đóng browser khi scrape còn chạy (2×goto 30s + evaluate → dễ >60s → "detached Frame").
+  const sessionMs = Math.max(
+    90000,
+    parseInt(process.env.PUPPETEER_SESSION_TIMEOUT_MS || '120000', 10)
+  );
   const timeout = setTimeout(() => {
-    console.warn('[withBrowser] Timeout — force closing browser');
+    console.warn('[withBrowser] Timeout — force closing browser sau', sessionMs, 'ms');
     browser.close().catch(() => {});
-  }, 60000);
+  }, sessionMs);
 
   try {
     return await fn(browser);
@@ -152,6 +161,41 @@ async function getCurrentKyFromVietlottListing(product) {
       timeout: 20000,
     });
     const $ = cheerio.load(html);
+
+    if (product === 'keno') {
+      const link = $('a[href*="view-detail-keno-result?id="]').first();
+      let currentKy = '';
+      let currentDate = '';
+      if (link.length) {
+        const href = link.attr('href') || '';
+        const idMatch = href.match(/[?&]id=(\d+)/i);
+        if (idMatch) currentKy = idMatch[1];
+        let nearText = '';
+        let $n = link;
+        for (let depth = 0; depth < 10; depth++) {
+          $n = $n.parent();
+          if (!$n.length) break;
+          nearText += ' ' + ($n.text() || '');
+          const dm = nearText.match(/(\d{2}\/\d{2}\/\d{4})/);
+          if (dm) {
+            currentDate = dm[0];
+            break;
+          }
+        }
+        if (!currentDate) {
+          const blob =
+            (link.text() || '') +
+            ' ' +
+            (link.nextAll().text() || '') +
+            ' ' +
+            ($('body').text() || '');
+          const dm2 = blob.match(/(\d{2}\/\d{2}\/\d{4})/);
+          if (dm2) currentDate = dm2[0];
+        }
+      }
+      return { currentKy, currentDate };
+    }
+
     const blob =
       ($('#divLeftContent').text() || '') +
       ' ' +
@@ -303,8 +347,51 @@ function extractKyAndDateFromText(blob) {
 }
 
 function parseOfficialMax3DFromVietlott($, isPro) {
-  const wrap = isPro ? $('#divMax3DProPlus') : $('#divMax3D');
-  const table = wrap.find('table.table-hover').first();
+  let wrap = $();
+  let table = $();
+
+  if (isPro) {
+    wrap = $('#divMax3DProPlus');
+    if (wrap.length) {
+      table = wrap.find('table.table-hover').first();
+    } else {
+      const divsClass3dMax = $('div[class]')
+        .filter((_, el) => /3d|max/i.test(String($(el).attr('class') || '')))
+        .map((_, el) => $(el).attr('class'))
+        .get();
+      console.log('[max3dpro debug] divs class matching 3d|max:', divsClass3dMax);
+      console.log(
+        '[max3dpro debug] divs:',
+        $('div[id], div[class*="3D"], div[class*="Max"]')
+          .map((_, el) => $(el).attr('id') || $(el).attr('class'))
+          .get()
+          .slice(0, 20)
+      );
+
+      const altTable = $('.chitietketqua_table.Max3DPro_table').first();
+      const altDivMax = $('div[class*="Max3DPro"]').first();
+      const altDivLower = $('div[class*="max3dpro"]').first();
+
+      if (altTable.length) {
+        wrap = altTable;
+        table = altTable.is('table') ? altTable : altTable.find('table.table-hover').first();
+      } else if (altDivMax.length) {
+        wrap = altDivMax;
+        table = altDivMax.find('table.table-hover').first();
+      } else if (altDivLower.length) {
+        wrap = altDivLower;
+        table = altDivLower.find('table.table-hover').first();
+      }
+
+      if (!table.length && wrap.length) {
+        table = wrap.find('table').first();
+      }
+    }
+  } else {
+    wrap = $('#divMax3D');
+    table = wrap.find('table.table-hover').first();
+  }
+
   if (!table.length) return null;
   const sets = [];
   const seenRowSig = new Set();
@@ -313,11 +400,20 @@ function parseOfficialMax3DFromVietlott($, isPro) {
     if (tds.length < 2) return;
     const labelText = tds.eq(0).text().replace(/\s+/g, ' ').trim().toLowerCase();
     let base = '';
-    if (labelText.includes('đặc biệt')) base = 'Đặc biệt';
-    else if (labelText.includes('nhất')) base = 'Giải nhất';
-    else if (labelText.includes('nhì')) base = 'Giải nhì';
-    else if (labelText.includes('ba')) base = 'Giải ba';
-    else return;
+    if (isPro) {
+      if (labelText.includes('đặc biệt') && !labelText.includes('phụ')) base = 'Đặc biệt';
+      else if (labelText.includes('phụ')) base = 'Giải phụ Đặc biệt';
+      else if (labelText.includes('nhất')) base = 'Giải nhất';
+      else if (labelText.includes('nhì')) base = 'Giải nhì';
+      else if (labelText.includes('ba')) base = 'Giải ba';
+      else return;
+    } else {
+      if (labelText.includes('đặc biệt')) base = 'Đặc biệt';
+      else if (labelText.includes('nhất')) base = 'Giải nhất';
+      else if (labelText.includes('nhì')) base = 'Giải nhì';
+      else if (labelText.includes('ba')) base = 'Giải ba';
+      else return;
+    }
     const cell = tds.eq(1);
     const parts = [];
     const pushThreeDigitSpan = ($sp) => {
@@ -328,24 +424,21 @@ function parseOfficialMax3DFromVietlott($, isPro) {
       cell.find('span.red').each((_, sp) => pushThreeDigitSpan($(sp)));
     } else {
       cell.find('span').each((_, sp) => {
-        const cls = ($(sp).attr('class') || '').trim();
+        const cls = String($(sp).attr('class') || '').trim();
         if (cls.includes('red')) return;
         pushThreeDigitSpan($(sp));
       });
-    }
-    if (parts.length === 0) {
-      const raw = cell.text().replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
-      const m = raw.match(/\d{3}/g);
-      if (m) parts.push(...m);
+      if (parts.length === 0) {
+        const raw = cell.text().replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+        const m = raw.match(/\d{3}/g);
+        if (m) parts.push(...m);
+      }
     }
     const rowSig = base + '|' + parts.slice().sort().join(',');
     if (seenRowSig.has(rowSig)) return;
     seenRowSig.add(rowSig);
     parts.forEach((w, idx) => {
-      sets.push({
-        label: base + ' bộ ' + (idx + 1),
-        numbers: w.split('').map((c) => parseInt(c, 10)),
-      });
+      sets.push({ label: base + ' bộ ' + (idx + 1), numbers: w.split('').map((c) => parseInt(c, 10)) });
     });
   });
   if (sets.length === 0) return null;
@@ -360,44 +453,51 @@ function parseOfficialMegaPowerL535FromVietlott($, product) {
   const box = area.find('div.day_so_ket_qua_v2').first();
   if (!box.length) return null;
 
-  let powerNumber = null;
-  const powerEl = box.find('span.bong_tron.active, span.bong_tron.no-margin-right.active').first();
-  if (powerEl.length) {
-    const t = parseInt(powerEl.text().trim(), 10);
-    if (!Number.isNaN(t)) powerNumber = t;
-  }
-
-  const main = [];
+  const items = [];
   box.find('span.bong_tron').each((_, el) => {
     const $el = $(el);
-    const cls = $el.attr('class') || '';
-    if (cls.includes('active')) return;
     const t = parseInt($el.text().trim(), 10);
     if (Number.isNaN(t)) return;
-    main.push(t);
+    items.push({ val: t, cls: String($el.attr('class') || '') });
   });
 
   const blob = String($('body').text() || '').replace(/\s+/g, ' ');
   let { kySo, drawDate } = extractKyAndDateFromText(blob);
 
   if (product === 'mega') {
-    if (main.length === 6 && powerNumber === null) {
-      return { numbers: main, powerNumber: null, kySo, drawDate };
+    if (items.length === 6) {
+      return { numbers: items.map((x) => x.val), powerNumber: null, kySo, drawDate };
     }
     return null;
   }
   if (product === 'power') {
-    const nums = [...main];
-    if (powerNumber === null && nums.length === 7) powerNumber = nums.pop();
-    if (nums.length === 6 && powerNumber !== null) {
+    let powerIdx = -1;
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].cls.includes('active')) {
+        powerIdx = i;
+        break;
+      }
+    }
+    if (powerIdx === -1) return null;
+    const powerNumber = items[powerIdx].val;
+    const nums = items.filter((_, i) => i !== powerIdx).map((x) => x.val);
+    if (nums.length === 6) {
       return { numbers: nums, powerNumber, kySo, drawDate };
     }
     return null;
   }
   if (product === 'lotto535') {
-    const nums = [...main];
-    if (powerNumber === null && nums.length === 6) powerNumber = nums.pop();
-    if (nums.length === 5 && powerNumber !== null) {
+    let powerIdx = -1;
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].cls.includes('active')) {
+        powerIdx = i;
+        break;
+      }
+    }
+    if (powerIdx === -1) return null;
+    const powerNumber = items[powerIdx].val;
+    const nums = items.filter((_, i) => i !== powerIdx).map((x) => x.val);
+    if (nums.length === 5) {
       return { numbers: nums, powerNumber, kySo, drawDate };
     }
     return null;
@@ -411,15 +511,29 @@ function uniqueKenoNumsUpTo20(arr) {
 
 function parseOfficialKenoFromVietlott($, kysoTarget) {
   const nums = [];
-  $('span.bong_tron.small').each((_, el) => {
-    const n = parseInt($(el).text().trim(), 10);
-    if (!Number.isNaN(n) && n >= 1 && n <= 80) nums.push(n);
-  });
+  const kenoBox = $('#divKenoResultContent .day_so_ket_qua_v2').first();
+  if (kenoBox.length) {
+    kenoBox
+      .find('span.bong_tron.small, span[class*="bong_tron"], span.ball_keno')
+      .each((_, el) => {
+        const n = parseInt($(el).text().trim(), 10);
+        if (!Number.isNaN(n) && n >= 1 && n <= 80) nums.push(n);
+      });
+  } else {
+    $('#divKenoResultContent')
+      .find('span.bong_tron.small, span[class*="bong_tron"], span.ball_keno')
+      .add('span.bong_tron.small')
+      .each((_, el) => {
+        const n = parseInt($(el).text().trim(), 10);
+        if (!Number.isNaN(n) && n >= 1 && n <= 80) nums.push(n);
+      });
+  }
 
   let drawDate = '';
   let kySo = '';
   let metaRow = null;
-  $('table tbody tr').each((_, tr) => {
+  const rows = $('#divKenoResultContent table.table-result-info tbody tr, #divKenoResultContent table tbody tr');
+  rows.each((_, tr) => {
     const tds = $(tr).find('td');
     if (tds.length < 3) return;
     const t0 = tds.eq(0).text();
@@ -434,6 +548,23 @@ function parseOfficialKenoFromVietlott($, kysoTarget) {
     metaRow = tr;
     return false;
   });
+  if (!metaRow) {
+    $('table tbody tr').each((_, tr) => {
+      const tds = $(tr).find('td');
+      if (tds.length < 3) return;
+      const t0 = tds.eq(0).text();
+      const t1 = tds.eq(1).text();
+      const dateMatch = t0.match(/(\d{2}\/\d{2}\/\d{4})/);
+      if (!dateMatch) return;
+      const kyFromHash = (t1.match(/#\s*(\d+)/) || [])[1];
+      const kyLong = (t1.match(/(\d{6,})/) || [])[1];
+      if (!kyFromHash && !kyLong) return;
+      drawDate = dateMatch[1];
+      kySo = kyFromHash || kyLong || '';
+      metaRow = tr;
+      return false;
+    });
+  }
 
   if (uniqueKenoNumsUpTo20(nums).length < 10 && metaRow) {
     const tds = $(metaRow).find('td');
@@ -453,6 +584,63 @@ function parseOfficialKenoFromVietlott($, kysoTarget) {
     if (!drawDate) drawDate = d2;
   }
   return { numbers: unique, powerNumber: null, kySo, drawDate };
+}
+
+/** Keno kỳ hiện tại: đợi DOM + cheerio; nếu đang ở listing SPA thì thử theo link chi tiết. */
+async function tryParseKenoCurrentFromPuppeteerPage(page) {
+  const selectors =
+    '#divKenoResultContent span.bong_tron.small, #divKenoResultContent span[class*="bong_tron"], span.bong_tron.small, span.ball_keno, #divKenoResultContent span.ball_keno';
+  try {
+    await page.waitForSelector(selectors, { timeout: 38000 });
+  } catch (_e) {
+    /* vẫn thử parse */
+  }
+  const fromHtml = (html) => parseOfficialKenoFromVietlott(cheerio.load(html), null);
+
+  let html = await page.content();
+  let parsed = fromHtml(html);
+  if (parsed && Array.isArray(parsed.numbers) && parsed.numbers.length >= 10) return parsed;
+
+  const detailHref = await page.evaluate(() => {
+    const as = Array.from(document.querySelectorAll('a[href*="view-detail-keno-result"]'));
+    for (const a of as) {
+      const raw = a.getAttribute('href') || '';
+      if (!raw.includes('view-detail-keno-result')) continue;
+      try {
+        return new URL(raw, window.location.origin).href;
+      } catch (_e) {
+        return raw.startsWith('http') ? raw : `${window.location.origin}${raw.startsWith('/') ? '' : '/'}${raw}`;
+      }
+    }
+    return '';
+  });
+  let cur = '';
+  try {
+    cur = page.url();
+  } catch (_e) {
+    cur = '';
+  }
+  if (
+    detailHref &&
+    detailHref !== cur &&
+    !String(cur).includes('view-detail-keno-result?id=')
+  ) {
+    try {
+      await page.goto(detailHref, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        await page.waitForSelector(selectors, { timeout: 28000 });
+      } catch (_e2) {
+        /* ignore */
+      }
+      html = await page.content();
+      parsed = fromHtml(html);
+      if (parsed && Array.isArray(parsed.numbers) && parsed.numbers.length >= 10) return parsed;
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+  return null;
 }
 
 function parseVietlottOfficialHtml($, product, kysoTarget) {
@@ -483,6 +671,8 @@ async function scrapeWithAxios(url, product, kysoTarget) {
       },
       timeout: 20000,
     });
+    const htmlStr = typeof html === 'string' ? html : String(html ?? '');
+    console.log('[scrapeWithAxios] fetched url:', u, 'htmlLen:', htmlStr.length, 'hasProPlus:', htmlStr.includes('divMax3DProPlus'));
 
     const $ = cheerio.load(html);
     const offic = parseVietlottOfficialHtml($, product, kysoTarget);
@@ -555,6 +745,143 @@ async function getVietlottFromSupabase(product, kyso) {
   return null;
 }
 
+/** Số kỳ Keno lớn nhất đã lưu (để neo dò kỳ mới nhất khi không có kyso). */
+async function getMaxKenoKyNumericFromSupabase() {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from('vietlott_results')
+      .select('kyso')
+      .eq('product', 'keno')
+      .order('kyso', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error || !data?.kyso) return null;
+    const n = parseInt(String(data.kyso).replace(/\D/g, ''), 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+/** Một dòng Keno đầy đủ số, kỳ mới nhất trong DB (fallback khi không scrape được live). */
+async function getLatestFullKenoFromSupabase() {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from('vietlott_results')
+      .select('*')
+      .eq('product', 'keno')
+      .order('kyso', { ascending: false })
+      .limit(8);
+    if (error || !Array.isArray(data)) return null;
+    for (const row of data) {
+      const nums = row.numbers;
+      if (Array.isArray(nums) && nums.length >= 10) {
+        return {
+          numbers: nums,
+          powerNumber: row.power_number,
+          sets: row.sets,
+          kySo: row.kyso,
+          drawDate: row.draw_date,
+        };
+      }
+    }
+    return null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+/**
+ * Keno không kyso: dùng kỳ từ winning-number-keno (getCurrentInfo) + dò vài kỳ kế tiếp bằng axios.
+ * Tránh probe hàng chục URL trước khi thử đúng trang chi tiết (gây load rất lâu).
+ */
+async function fetchKenoNoKysoViaDetailAxios(info, cacheKey) {
+  const id0 =
+    info?.currentKy != null && String(info.currentKy).trim() !== ''
+      ? padVietlottId('keno', info.currentKy)
+      : '';
+  if (!id0) return null;
+  const baseN = parseInt(String(id0).replace(/\D/g, ''), 10);
+  if (!Number.isFinite(baseN) || baseN < 1) return null;
+
+  const aheadMax = Math.max(0, Math.min(24, parseInt(process.env.VIETLOTT_KENO_FAST_AHEAD || '12', 10)));
+  let best = null;
+  let bestN = -1;
+
+  for (let j = 0; j <= aheadMax; j++) {
+    const idStr = padVietlottId('keno', baseN + j);
+    const u = buildVietlottDetailUrl('keno', idStr);
+    const r = await scrapeWithAxios(u, 'keno', idStr);
+    if (!r || !Array.isArray(r.numbers) || r.numbers.length < 10) {
+      if (j === 0) return null;
+      break;
+    }
+    const kn = parseInt(padVietlottId('keno', r.kySo || idStr), 10);
+    if (Number.isFinite(kn) && kn > bestN) {
+      bestN = kn;
+      best = r;
+    }
+  }
+
+  if (!best) return null;
+  const rowKy = padVietlottId('keno', best.kySo || '');
+  if (rowKy) best.kySo = rowKy;
+  setCache(cacheKey, best);
+  await saveVietlottToSupabase('keno', rowKy || best.kySo, best);
+  console.log('[keno] fetchKenoNoKysoViaDetailAxios kySo=' + best.kySo);
+  return best;
+}
+
+/**
+ * Keno không kyso: dò các trang chi tiết ?id= (axios) — chỉ fallback khi không lấy được kỳ từ listing / chi tiết nhanh.
+ * Neo từ max(kỳ listing, max DB, VIETLOTT_KENO_PROBE_START), lấy kết quả có kỳ số lớn nhất trong cửa sổ.
+ */
+async function probeLatestKenoWithAxios(info) {
+  const sbMax = await getMaxKenoKyNumericFromSupabase();
+  const infoKy = parseInt(String(info?.currentKy || '').replace(/\D/g, ''), 10);
+  const envStart = parseInt(process.env.VIETLOTT_KENO_PROBE_START || '0', 10);
+  let base = Math.max(
+    Number.isFinite(sbMax) ? sbMax : 0,
+    Number.isFinite(infoKy) ? infoKy : 0,
+    Number.isFinite(envStart) ? envStart : 0
+  );
+  if (base < 100000) base = 2800720;
+
+  const range = Math.max(8, Math.min(120, parseInt(process.env.VIETLOTT_KENO_PROBE_RANGE || '28', 10)));
+  let best = null;
+  let bestN = -1;
+  for (let i = -5; i < range; i++) {
+    const n = base + i;
+    if (n < 1) continue;
+    const idStr = padVietlottId('keno', n);
+    const u = buildVietlottDetailUrl('keno', idStr);
+    const r = await scrapeWithAxios(u, 'keno', idStr);
+    if (!r || !Array.isArray(r.numbers) || r.numbers.length < 10) continue;
+    const kn = parseInt(padVietlottId('keno', r.kySo || idStr), 10);
+    if (Number.isFinite(kn) && kn > bestN) {
+      bestN = kn;
+      best = r;
+    }
+  }
+  // Kỳ mới có thể nằm ngay sau kỳ neo (DB chưa kịp cập nhật): dò thêm vài kỳ về phía sau.
+  if (best && bestN > 0) {
+    const ahead = Math.max(2, Math.min(20, parseInt(process.env.VIETLOTT_KENO_PROBE_AHEAD || '8', 10)));
+    for (let j = 1; j <= ahead; j++) {
+      const idStr = padVietlottId('keno', bestN + j);
+      const r = await scrapeWithAxios(buildVietlottDetailUrl('keno', idStr), 'keno', idStr);
+      if (!r || !Array.isArray(r.numbers) || r.numbers.length < 10) break;
+      const kn = parseInt(padVietlottId('keno', r.kySo || idStr), 10);
+      if (Number.isFinite(kn) && kn > bestN) {
+        bestN = kn;
+        best = r;
+      }
+    }
+  }
+  return best;
+}
+
 // Lưu kết quả XSKT vào Supabase
 async function saveXSKTToSupabase(dai, drawDate, data) {
   if (!supabase) return;
@@ -624,6 +951,28 @@ async function scrapeVietlott(product, kyso) {
     }
   }
 
+  // Keno không kyso: trước tiên 1–13 request chi tiết theo kỳ từ winning-number-keno; probe rộng chỉ khi cần.
+  if (product === 'keno' && !kyso) {
+    const viaDetail = await fetchKenoNoKysoViaDetailAxios(info, cacheKey);
+    if (viaDetail) return viaDetail;
+
+    const probed = await probeLatestKenoWithAxios(info);
+    if (probed) {
+      const rowKy = padVietlottId('keno', probed.kySo || '');
+      if (rowKy) probed.kySo = rowKy;
+      setCache(cacheKey, probed);
+      await saveVietlottToSupabase(product, rowKy || probed.kySo, probed);
+      console.log('[keno] probeLatestKenoWithAxios kySo=' + probed.kySo);
+      return probed;
+    }
+    const stale = await getLatestFullKenoFromSupabase();
+    if (stale) {
+      setCache(cacheKey, stale);
+      console.log('[keno] fallback getLatestFullKenoFromSupabase kySo=' + stale.kySo);
+      return stale;
+    }
+  }
+
   const tryUrls = [];
 
   if (kyso) {
@@ -635,9 +984,18 @@ async function scrapeVietlott(product, kyso) {
         ? padVietlottId(product, info.currentKy)
         : '';
     const detailUrl = id ? buildVietlottDetailUrl(product, id) : null;
-    if (detailUrl) tryUrls.push(detailUrl);
     const listUrl = buildVietlottListingUrl(product);
-    if (listUrl && !tryUrls.includes(listUrl)) tryUrls.push(listUrl);
+    // Max3D / Pro: ưu tiên trang listing (HTML ổn định, parse nhanh); detail để fallback.
+    if (product === 'max3d' || product === 'max3dpro') {
+      if (listUrl) tryUrls.push(listUrl);
+      if (detailUrl) tryUrls.push(detailUrl);
+    } else if (product === 'keno') {
+      if (detailUrl) tryUrls.push(detailUrl);
+      if (listUrl) tryUrls.push(listUrl);
+    } else {
+      if (detailUrl) tryUrls.push(detailUrl);
+      if (listUrl && !tryUrls.includes(listUrl)) tryUrls.push(listUrl);
+    }
   }
 
   if (tryUrls.length === 0) throw new Error('Unknown product: ' + product);
@@ -676,29 +1034,82 @@ async function scrapeVietlott(product, kyso) {
   if (product === 'mega') {
     throw new Error('Không parse được dữ liệu Mega từ HTML theo ngày');
   }
-  if ((product === 'max3d' || product === 'max3dpro') && kyso) {
-    throw new Error('Không parse được dữ liệu 3D từ trang theo ngày cho kỳ ' + kyso);
+  if (product === 'max3d' || product === 'max3dpro') {
+    throw new Error('Không parse được dữ liệu Max3D từ vietlott.vn');
   }
   console.log('[' + product + '] axios failed, trying puppeteer');
 
   return withBrowser(async (browser) => {
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+    const kenoNoKy = product === 'keno' && !kyso;
     let opened = false;
     let gotoErr = null;
     for (const u of tryUrls) {
       if (!u) continue;
+      const isKenoListingSpa =
+        kenoNoKy &&
+        u.includes('/ket-qua-trung-thuong/keno') &&
+        !u.includes('view-detail-keno-result') &&
+        !u.includes('winning-number-keno');
       try {
-        await page.goto(u, { waitUntil: 'networkidle2', timeout: 60000 });
+        if (isKenoListingSpa) {
+          try {
+            await page.goto(u, { waitUntil: 'networkidle2', timeout: 90000 });
+          } catch (_e1) {
+            await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 45000 });
+          }
+        } else {
+          await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        }
         url = u;
         opened = true;
-        break;
       } catch (e) {
         gotoErr = e;
+        await new Promise((r) => setTimeout(r, kenoNoKy ? 600 : 0));
+        continue;
       }
+      if (kenoNoKy) {
+        const parsedK = await tryParseKenoCurrentFromPuppeteerPage(page);
+        if (parsedK && Array.isArray(parsedK.numbers) && parsedK.numbers.length >= 10) {
+          const rowKy = padVietlottId('keno', parsedK.kySo || '');
+          if (rowKy) parsedK.kySo = rowKy;
+          setCache(cacheKey, parsedK);
+          await saveVietlottToSupabase(product, rowKy || parsedK.kySo, parsedK);
+          return parsedK;
+        }
+        await new Promise((r) => setTimeout(r, 800));
+        continue;
+      }
+      break;
     }
     if (!opened) throw gotoErr || new Error('Không mở được trang kết quả');
-    await new Promise(r => setTimeout(r, 5000));
+
+    if (kenoNoKy) {
+      const fbRaw = String(process.env.VIETLOTT_KENO_FALLBACK_ID || '').replace(/\D/g, '');
+      const fbId = fbRaw ? padVietlottId('keno', fbRaw) : '';
+      const fbUrl = fbId ? buildVietlottDetailUrl('keno', fbId) : null;
+      if (fbUrl) {
+        try {
+          await page.goto(fbUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+          const parsedFb = await tryParseKenoCurrentFromPuppeteerPage(page);
+          if (parsedFb && Array.isArray(parsedFb.numbers) && parsedFb.numbers.length >= 10) {
+            const rowKy = padVietlottId('keno', parsedFb.kySo || '');
+            if (rowKy) parsedFb.kySo = rowKy;
+            setCache(cacheKey, parsedFb);
+            await saveVietlottToSupabase(product, rowKy || parsedFb.kySo, parsedFb);
+            return parsedFb;
+          }
+        } catch (_e) {
+          /* ignore */
+        }
+      }
+      throw new Error(
+        'Không tìm thấy kết quả Keno (đã thử dò kỳ qua axios + SPA). Gọi /vietlott/keno?kyso= hoặc VIETLOTT_KENO_PROBE_START / VIETLOTT_KENO_FALLBACK_ID'
+      );
+    }
+
+    await new Promise((r) => setTimeout(r, 3000));
 
     // MAX 3D / MAX 3D PRO
     if (product === 'max3d' || product === 'max3dpro') {
@@ -759,20 +1170,31 @@ async function scrapeVietlott(product, kyso) {
       return result;
     }
 
-    // KENO — scrape theo kyso từ trang tra cứu
+    // KENO — scrape theo kyso từ trang tra cứu (một evaluate để tránh frame detach giữa các lần gọi)
     if (product === 'keno' && kyso) {
-      const numbers = await page.evaluate(() => {
-        const balls = document.querySelectorAll('span.ball_keno, span.ball.ball_keno');
-        return Array.from(balls).map(e => parseInt(e.textContent.trim())).filter(n => !isNaN(n) && n >= 1);
-      });
-
-      const kySoParsed = await page.evaluate(() => {
-        const el = document.querySelector('span#cur_ky, div.kythuong span');
-        return el ? el.textContent.trim().replace(/[^0-9]/g, '') : '';
+      const { numbers: numsRaw, kySoParsed } = await page.evaluate(() => {
+        const balls = document.querySelectorAll(
+          'span.ball_keno, span.ball.ball_keno, span.bong_tron.small, #divKenoResultContent span.bong_tron.small'
+        );
+        const numbers = Array.from(balls)
+          .map((e) => parseInt(e.textContent.trim(), 10))
+          .filter((n) => !isNaN(n) && n >= 1 && n <= 80);
+        const el = document.querySelector(
+          'span#cur_ky, div.kythuong span, #divKenoResultContent table tbody tr td:nth-child(2)'
+        );
+        let kySoParsed = el ? el.textContent.trim().replace(/[^0-9]/g, '') : '';
+        if (!kySoParsed) {
+          const t2 = document.querySelector('#divKenoResultContent table tbody tr td:nth-child(2)');
+          if (t2) {
+            const m = (t2.textContent || '').match(/#\s*(\d+)/);
+            if (m) kySoParsed = m[1];
+          }
+        }
+        return { numbers: numbers, kySoParsed };
       });
 
       const result = {
-        numbers: [...new Set(numbers)].slice(0, 20),
+        numbers: [...new Set(numsRaw)].slice(0, 20),
         kySo: kySoParsed,
         drawDate: toViDate(new Date()),
       };
@@ -784,58 +1206,93 @@ async function scrapeVietlott(product, kyso) {
       return result;
     }
 
-    // MEGA, POWER, LOTTO535
-    const numbers = await page.evaluate((prod) => {
+    // MEGA, POWER, LOTTO535, KENO (không kyso): một page.evaluate — ít race với timeout đóng browser
+    const scraped = await page.evaluate((prod) => {
       const maps = {
         mega:     'span.ball_orange, span.ball.ball_orange',
         power:    'span.ball_power, span.ball.ball_power',
-        keno:     'span.ball_keno, span.ball.ball_keno',
+        keno:     'span.ball_keno, span.ball.ball_keno, span.bong_tron.small, #divKenoResultContent span.bong_tron.small',
         lotto535: 'span.ball_lotto',
       };
       const sel = maps[prod] || 'span[class*="ball"]';
       const els = document.querySelectorAll(sel);
-      return Array.from(els).map(e => parseInt(e.textContent.trim())).filter(n => !isNaN(n) && n >= 1);
-    }, product);
+      const numbers = Array.from(els)
+        .map((e) => parseInt(e.textContent.trim(), 10))
+        .filter((n) => !isNaN(n) && n >= 1 && (prod !== 'keno' || n <= 80));
 
-    let powerNumber = null;
-    if (product === 'lotto535' || product === 'power') {
-      powerNumber = await page.evaluate(() => {
+      let powerNumber = null;
+      if (prod === 'lotto535' || prod === 'power') {
         const el = document.querySelector(
           'span.ball_lotto.ball_power2, span.ball.ball_lotto.ball_power2, span.ball_power2, span.ball.ball_power2'
         );
-        return el ? parseInt(el.textContent.trim()) : null;
-      });
-    }
-
-    const kySo = await page.evaluate(() => {
-      const periodEl = document.querySelector('span.period_live');
-      if (periodEl) return periodEl.textContent.trim().replace(/[^0-9]/g, '');
-      const curKy = document.querySelector('span#cur_ky');
-      if (curKy) return curKy.textContent.trim().replace(/[^0-9]/g, '');
-      const allTitleTt = document.querySelectorAll('div.title_tt');
-      if (allTitleTt.length > 0) {
-        const m = allTitleTt[0].textContent.match(/#(\d+)/);
-        if (m) return m[1];
+        if (el) {
+          const p = parseInt(el.textContent.trim(), 10);
+          powerNumber = isNaN(p) ? null : p;
+        }
       }
-      return '';
-    });
 
-    const drawDate = await page.evaluate(() => {
-      // Trang theo ngày: div.title_tt đầu tiên
+      let kySo = '';
+      const periodEl = document.querySelector('span.period_live');
+      if (periodEl) kySo = periodEl.textContent.trim().replace(/[^0-9]/g, '');
+      else {
+        const curKy = document.querySelector('span#cur_ky');
+        if (curKy) kySo = curKy.textContent.trim().replace(/[^0-9]/g, '');
+        else {
+          const allTitleTt0 = document.querySelectorAll('div.title_tt');
+          if (allTitleTt0.length > 0) {
+            const m = allTitleTt0[0].textContent.match(/#(\d+)/);
+            if (m) kySo = m[1];
+          }
+        }
+      }
+
+      let drawDate = '';
       const allTitleTt = document.querySelectorAll('div.title_tt');
       if (allTitleTt.length > 0) {
         const m = allTitleTt[0].textContent.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-        if (m) return m[0];
+        if (m) drawDate = m[0];
       }
-      // Trang trực tiếp: div.kythuong hoặc div.kyve
-      const kythuong = document.querySelector('div.kythuong, div.kyve');
-      if (kythuong) {
-        const m = kythuong.textContent.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-        if (m) return m[0];
+      if (!drawDate) {
+        const kythuong = document.querySelector('div.kythuong, div.kyve');
+        if (kythuong) {
+          const m = kythuong.textContent.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+          if (m) drawDate = m[0];
+        }
       }
-      const m = document.body.innerText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-      return m ? m[0] : (() => { const d = new Date(); return String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0') + '/' + d.getFullYear(); })();
-    });
+      if (!drawDate) {
+        const m = document.body.innerText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        drawDate = m
+          ? m[0]
+          : (() => {
+              const d = new Date();
+              return (
+                String(d.getDate()).padStart(2, '0') +
+                '/' +
+                String(d.getMonth() + 1).padStart(2, '0') +
+                '/' +
+                d.getFullYear()
+              );
+            })();
+      }
+
+      if (!kySo && prod === 'keno') {
+        const tr = document.querySelector('#divKenoResultContent table tbody tr');
+        if (tr) {
+          const cells = tr.querySelectorAll('td');
+          if (cells.length >= 2) {
+            const mm = (cells[1].textContent || '').match(/#\s*(\d+)/);
+            if (mm) kySo = mm[1];
+          }
+        }
+      }
+
+      return { numbers, powerNumber, kySo, drawDate };
+    }, product);
+
+    const numbers = scraped.numbers;
+    const powerNumber = scraped.powerNumber;
+    const kySo = scraped.kySo;
+    const drawDate = scraped.drawDate;
 
     console.log('[' + product + '] numbers:', numbers, 'kySo:', kySo, 'drawDate:', drawDate);
 
