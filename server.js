@@ -102,34 +102,39 @@ const MAX_CONCURRENT = 2; // Tối đa 2 browser cùng lúc
 let activeBrowsers = 0;
 
 async function withBrowser(fn) {
-  // Chờ nếu đang có quá nhiều browser
   while (activeBrowsers >= MAX_CONCURRENT) {
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 500));
   }
 
   activeBrowsers++;
-  const baseArgs = [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--ignore-certificate-errors',
-    '--disable-dev-shm-usage',
-    '--disable-gpu',
-    '--disable-gpu-sandbox',
-    '--no-first-run',
-    '--disable-extensions',
-  ];
-  // --single-process / --no-zygote: hay cần trên Docker Linux tối RAM, nhưng trên Windows thường gây
-  // "Cannot use V8 Proxy resolver in single process mode" + lỗi GPU → mặc định TẮT.
-  if (process.env.PUPPETEER_USE_SINGLE_PROCESS === '1') {
-    baseArgs.push('--no-zygote', '--single-process');
-  }
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-    args: baseArgs,
-  });
 
-  // Tránh đóng browser khi scrape còn chạy (2×goto 30s + evaluate → dễ >60s → "detached Frame").
+  const apiKey = process.env.BROWSERLESS_API_KEY;
+  let browser;
+  if (apiKey) {
+    browser = await puppeteer.connect({
+      browserWSEndpoint: `wss://chrome.browserless.io?token=${encodeURIComponent(apiKey)}`,
+    });
+  } else {
+    const baseArgs = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--ignore-certificate-errors',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-gpu-sandbox',
+      '--no-first-run',
+      '--disable-extensions',
+    ];
+    if (process.env.PUPPETEER_USE_SINGLE_PROCESS === '1') {
+      baseArgs.push('--no-zygote', '--single-process');
+    }
+    browser = await puppeteer.launch({
+      headless: 'new',
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: baseArgs,
+    });
+  }
+
   const sessionMs = Math.max(
     90000,
     parseInt(process.env.PUPPETEER_SESSION_TIMEOUT_MS || '120000', 10)
