@@ -41,7 +41,7 @@ function toSlugDate(d) {
   return dd + '-' + mm + '-' + yyyy;
 }
 
-/** Chuẩn hóa ngày lưu Supabase (cột kiểu date): luôn yyyy-mm-dd (ISO). Date → local ISO; dd/mm/yyyy → đổi sang ISO. */
+/** Lưu Supabase (cột date): mọi biểu diễn hợp lệ → yyyy-mm-dd (VD 12/05/2026 → 2026-05-12). */
 function normalizeDrawDateForSupabase(s) {
   if (s == null || s === '') return '';
   if (s instanceof Date && !Number.isNaN(s.getTime())) {
@@ -51,19 +51,31 @@ function normalizeDrawDateForSupabase(s) {
     return y + '-' + m + '-' + d;
   }
   const t = String(s).trim();
-  const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return iso[1] + '-' + iso[2] + '-' + iso[3];
-  const vi = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (vi) {
-    const dd = vi[1].padStart(2, '0');
-    const mm = vi[2].padStart(2, '0');
-    const yyyy = vi[3];
-    return yyyy + '-' + mm + '-' + dd;
+  let m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[1] + '-' + m[2] + '-' + m[3];
+  m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
   }
-  return t;
+  m = t.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (m) {
+    return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+  }
+  m = t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (m) {
+    return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+  }
+  const parsed = new Date(t);
+  if (!Number.isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const mo = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return y + '-' + mo + '-' + d;
+  }
+  return '';
 }
 
-/** Đọc từ DB cho API/user: yyyy-mm-dd (hoặc legacy dd/mm) → dd/mm/yyyy. */
+/** Đọc DB cho user: yyyy-mm-dd (hoặc datetime ISO) → dd/mm/yyyy. Legacy dd/mm giữ nguyên (có pad). */
 function drawDateFromPg(s) {
   if (s == null || s === '') return '';
   const t = String(s).trim();
@@ -989,12 +1001,13 @@ async function saveXSKTToSupabase(dai, drawDate, data) {
 async function getXSKTFromSupabase(dai, drawDate) {
   if (!supabase || !drawDate) return null;
   try {
-    const keyDate = normalizeDrawDateForSupabase(drawDate);
+    const keyIso = normalizeDrawDateForSupabase(drawDate);
+    if (!keyIso) return null;
     const { data, error } = await supabase
       .from('xskt_results')
       .select('*')
       .eq('dai', dai)
-      .eq('draw_date', keyDate || drawDate)
+      .eq('draw_date', keyIso)
       .single();
     if (error || !data) return null;
     console.log('[supabase] cache hit xskt', dai, drawDate);
