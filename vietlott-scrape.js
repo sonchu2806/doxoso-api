@@ -841,6 +841,35 @@ async function getLatestFullKenoFromSupabase() {
   }
 }
 
+/** Kỳ mới nhất đã lưu theo product (order kyso desc). Chỉ trả khi có numbers hoặc sets. */
+async function getLatestVietlottFromSupabase(product) {
+  if (!supabase || !VIETLOTT_PRODUCT_IDS.includes(product)) return null;
+  try {
+    const { data, error } = await supabase
+      .from('vietlott_results')
+      .select('*')
+      .eq('product', product)
+      .order('kyso', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return null;
+    const filled =
+      (Array.isArray(data.numbers) && data.numbers.length > 0) ||
+      (Array.isArray(data.sets) && data.sets.length > 0);
+    if (!filled) return null;
+    console.log('[supabase] latest vietlott row', product, data.kyso);
+    return {
+      numbers: data.numbers,
+      powerNumber: data.power_number,
+      sets: data.sets,
+      kySo: data.kyso,
+      drawDate: drawDateFromPg(data.draw_date),
+    };
+  } catch (_e) {
+    return null;
+  }
+}
+
 /**
  * Keno không kyso: dùng kỳ từ winning-number-keno (getCurrentInfo) + dò vài kỳ kế tiếp bằng axios.
  * Tránh probe hàng chục URL trước khi thử đúng trang chi tiết (gây load rất lâu).
@@ -1104,6 +1133,15 @@ async function scrapeVietlott(product, kyso) {
       setCache(cacheKey, staleSb);
       return staleSb;
     }
+  }
+  const staleLatest = await getLatestVietlottFromSupabase(product);
+  if (staleLatest) {
+    console.warn(
+      '[' + product + '] axios không lấy được HTML vietlott — trả kỳ mới nhất trong Supabase',
+      staleLatest.kySo
+    );
+    setCache(cacheKey, staleLatest);
+    return staleLatest;
   }
   if (product === 'keno' && !kyso) {
     const latestKeno = await getLatestFullKenoFromSupabase();
@@ -2054,6 +2092,7 @@ module.exports = {
   saveVietlottToSupabase,
   saveXSKTToSupabase,
   getVietlottFromSupabase,
+  getLatestVietlottFromSupabase,
   getXSKTFromSupabase,
   getCurrentInfo,
   getUrlFromKySo,
