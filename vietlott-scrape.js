@@ -41,27 +41,29 @@ function toSlugDate(d) {
   return dd + '-' + mm + '-' + yyyy;
 }
 
-/** Chuẩn hóa ngày lưu Supabase: luôn dd/mm/yyyy; ISO yyyy-mm-dd → dd/mm/yyyy; Date → toViDate. */
+/** Chuẩn hóa ngày lưu Supabase (cột kiểu date): luôn yyyy-mm-dd (ISO). Date → local ISO; dd/mm/yyyy → đổi sang ISO. */
 function normalizeDrawDateForSupabase(s) {
   if (s == null || s === '') return '';
   if (s instanceof Date && !Number.isNaN(s.getTime())) {
-    return toViDate(s);
+    const y = s.getFullYear();
+    const m = String(s.getMonth() + 1).padStart(2, '0');
+    const d = String(s.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + d;
   }
   const t = String(s).trim();
-  const isoHead = t.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (isoHead) {
-    const d = isoHead[1];
-    const parts = d.split('-');
-    return parts[2] + '/' + parts[1] + '/' + parts[0];
-  }
+  const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[1] + '-' + iso[2] + '-' + iso[3];
   const vi = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (vi) {
-    return vi[1].padStart(2, '0') + '/' + vi[2].padStart(2, '0') + '/' + vi[3];
+    const dd = vi[1].padStart(2, '0');
+    const mm = vi[2].padStart(2, '0');
+    const yyyy = vi[3];
+    return yyyy + '-' + mm + '-' + dd;
   }
   return t;
 }
 
-/** Đọc từ DB: trả dd/mm/yyyy (hỗ trợ legacy yyyy-mm-dd trong DB). */
+/** Đọc từ DB cho API/user: yyyy-mm-dd (hoặc legacy dd/mm) → dd/mm/yyyy. */
 function drawDateFromPg(s) {
   if (s == null || s === '') return '';
   const t = String(s).trim();
