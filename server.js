@@ -286,7 +286,7 @@ app.get('/admin/supabase-status', async (req, res) => {
 /**
  * Backfill Vietlott ~months tháng gần đây vào Supabase (mặc định 2).
  * Keno: giới hạn VIETLOTT_BACKFILL_KENO_MAX (mặc định 6000 kỳ lùi) vì mật độ kỳ cao.
- * ?sync=1 — chạy xong mới trả JSON (lâu, dễ timeout trên Railway).
+ * ?days=15 — cửa sổ ngày (ưu tiên hơn months cho độ sâu lùi kỳ).
  * ?keno=0 — bỏ qua Keno.
  * ?products=mega,power — chỉ các game liệt kê.
  */
@@ -320,6 +320,10 @@ app.get('/admin/backfill-vietlott', async (req, res) => {
   }
 
   const opts = { products: productList };
+  const daysParam = parseInt(String(req.query.days || ''), 10);
+  if (Number.isFinite(daysParam) && daysParam > 0) {
+    opts.days = Math.min(120, daysParam);
+  }
 
   if (sync) {
     try {
@@ -337,10 +341,11 @@ app.get('/admin/backfill-vietlott', async (req, res) => {
   return res.json({
     success: true,
     months,
+    days: opts.days != null ? opts.days : null,
     mode: 'background',
     products: productList,
     message:
-      'Đang backfill nền (có thể 10–60+ phút). Theo dõi log Railway và GET /admin/supabase-status. Thử ?sync=1 khi chạy local.',
+      'Đang backfill nền (có thể 10–60+ phút). Theo dõi log Railway và GET /admin/supabase-status. Thử ?sync=1 khi chạy local. Ví dụ Lotto 15 ngày: ?products=lotto535&days=15',
   });
 });
 

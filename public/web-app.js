@@ -452,7 +452,7 @@
     render();
   }
 
-  function gridHTML(total, pick, accent, flexKeno, wrapClass) {
+  function gridHTML(total, pick, accent, flexKeno, wrapClass, omitSelHint) {
     flexKeno = !!flexKeno;
     var maxSel = flexKeno ? 10 : pick;
     var minReady = flexKeno ? 1 : pick;
@@ -475,12 +475,16 @@
       );
     }
     var ready = state.picker.length >= minReady && state.picker.length <= maxSel;
-    return (
+    var gridOnly =
       '<div class="' +
       wrapCls +
       '">' +
       cells.join('') +
-      '</div><div class="sel-hint' +
+      '</div>';
+    if (omitSelHint) return gridOnly;
+    return (
+      gridOnly +
+      '<div class="sel-hint' +
       (ready ? ' ok' : '') +
       '">' +
       (ready
@@ -493,7 +497,7 @@
   }
 
   function lotto535HTML() {
-    var main = gridHTML(35, 5, '', false, 'grid-lotto535-main');
+    var main = gridHTML(35, 5, '', false, '', true);
     var spec = [];
     for (var n = 1; n <= 12; n++) {
       var sel = state.lottoSpec.indexOf(n) !== -1;
@@ -514,11 +518,14 @@
     var sr = state.lottoSpec.length === 1;
     var mr = state.picker.length === 5;
     return (
-      '<p style="margin:8px 0 4px;font-size:13px;color:#666C76">⭐ Số đặc biệt (01-12)</p><div class="grid-pick grid-lotto535-spec">' +
+      '<div class="lotto535-pick-wrap">' +
+      '<p style="margin:8px 0 4px;font-size:13px;color:#666C76;text-align:center;width:100%">⭐ Số đặc biệt (01-12)</p>' +
+      '<div class="grid-pick">' +
       spec.join('') +
       '</div>' +
       main +
-      (mr && sr ? '<div class="sel-hint ok">Đã chọn đủ số, bạn có thể Dò kết quả.</div>' : '')
+      (mr && sr ? '<div class="sel-hint ok">Đã chọn đủ số, bạn có thể Dò kết quả.</div>' : '') +
+      '</div>'
     );
   }
 

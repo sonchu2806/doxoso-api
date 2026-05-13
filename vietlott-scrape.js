@@ -1930,7 +1930,12 @@ async function warmVietlottRecentToSupabase() {
       const cur = parseInt(String(info?.currentKy || '').replace(/\D/g, ''), 10);
       if (Number.isNaN(cur) || cur < 1) continue;
 
-      const maxBack = product === 'keno' ? Math.min(depth, 12) : depth;
+      const maxBack =
+        product === 'keno'
+          ? Math.min(depth, 12)
+          : product === 'lotto535'
+            ? Math.min(Math.max(depth, 20), 45)
+            : depth;
       for (let i = 0; i < maxBack; i++) {
         const n = cur - i;
         if (n < 1) break;
@@ -2018,11 +2023,6 @@ async function backfillVietlottMonthsToSupabase(months, options) {
   for (const product of products) {
     const by = { skipped: 0, fetched: 0, errors: 0, steps: 0, planned: 0 };
     stats.byProduct[product] = by;
-    if (product === 'lotto535') {
-      console.warn('[backfill] lotto535 skipped — use date-based backfill instead');
-      by.skipped++;
-      continue;
-    }
     try {
       const info = await getCurrentInfo(product);
       const cur = parseInt(String(info?.currentKy || '').replace(/\D/g, ''), 10);
