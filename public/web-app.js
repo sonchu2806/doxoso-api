@@ -517,14 +517,20 @@
     }
     var sr = state.lottoSpec.length === 1;
     var mr = state.picker.length === 5;
+    var hintOk = mr && sr;
     return (
       '<div class="lotto535-pick-wrap">' +
-      '<p style="margin:8px 0 4px;font-size:13px;color:#666C76;text-align:center;width:100%">⭐ Số đặc biệt (01-12)</p>' +
+      '<p style="margin:0 0 6px;font-size:13px;color:#666C76;text-align:center;width:100%">Chọn 5 số (01-35)</p>' +
+      main +
+      '<p style="margin:14px 0 4px;font-size:13px;color:#666C76;text-align:center;width:100%">⭐ Số đặc biệt (01-12)</p>' +
       '<div class="grid-pick">' +
       spec.join('') +
       '</div>' +
-      main +
-      (mr && sr ? '<div class="sel-hint ok">Đã chọn đủ số, bạn có thể Dò kết quả.</div>' : '') +
+      '<div class="sel-hint' +
+      (hintOk ? ' ok' : '') +
+      '">' +
+      (hintOk ? 'Đã chọn đủ số, bạn có thể Dò kết quả.' : 'Vui lòng chọn 5 số và 1 số đặc biệt để dò kết quả.') +
+      '</div>' +
       '</div>'
     );
   }
@@ -547,13 +553,6 @@
     return out.join('');
   }
 
-  /** Bỏ tiền tố "Giải " trùng với nhãn giải ở phần kết quả chi tiết. */
-  function formatPrizeDisplay(prize) {
-    return String(prize == null ? '' : prize)
-      .replace(/^Giải\s+/i, '')
-      .trim();
-  }
-
   function resultHTML() {
     if (!state.apiResult || !state.checkResult) return '';
     var cr = state.checkResult;
@@ -574,7 +573,7 @@
       '">' +
       (cr.prize ? 'Trúng' : 'Không trúng') +
       '</div>';
-    if (cr.prize) lines += '<div style="margin-top:2px;font-size:12px;color:#7B818D">' + escapeHtml(formatPrizeDisplay(cr.prize)) + '</div>';
+    if (cr.prize) lines += '<div style="margin-top:2px;font-size:12px;color:#7B818D">Giải: ' + escapeHtml(cr.prize) + '</div>';
     lines += '</div>';
     if (isText) {
       var kmap = {
@@ -947,7 +946,7 @@
       '">' +
       (cr.prize ? 'Trúng' : 'Không trúng') +
       '</div>';
-    if (cr.prize) lines += '<div style="font-size:12px;margin-top:4px">' + escapeHtml(formatPrizeDisplay(cr.prize)) + '</div>';
+    if (cr.prize) lines += '<div style="font-size:12px;margin-top:4px">' + escapeHtml(cr.prize) + '</div>';
     lines += '</div><p style="margin-top:8px">Vé của bạn: ' + escapeHtml(state.xsktTicket) + '</p>';
     lines += '<div style="margin-top:10px;font-size:12px;font-weight:700;color:#6D7380">Danh sách số trúng</div>';
     prizes.forEach(function (p) {
@@ -1024,7 +1023,7 @@
           escapeHtml(nums || '—') +
           '</div>' +
           (win
-            ? '<div style="color:#1E9E57;font-size:12px;font-weight:700;margin-top:4px">Trúng: ' + escapeHtml(formatPrizeDisplay(it.prize)) + '</div>'
+            ? '<div style="color:#1E9E57;font-size:12px;font-weight:700;margin-top:4px">Trúng: ' + escapeHtml(it.prize) + '</div>'
             : '') +
           '</div></div></div></div>';
       });
