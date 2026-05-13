@@ -34,6 +34,9 @@
   var KEY = 'doxoso_saved_tickets';
 
   /** Logo PNG trong /public/assets (copy từ doxoso-mini) */
+  var MOMO_CONSENT_HTML =
+    '<p class="momo-consent">Bằng việc ấn Dò kết quả bạn đồng ý cho phép MoMo lưu lại thông tin vé, MoMo cam kết chỉ sử dụng để tra cứu kết quả</p>';
+
   var LOGO_SRC = {
     keno: '/assets/vietlott-logos/keno.png',
     mega: '/assets/vietlott-logos/mega645.png',
@@ -795,6 +798,7 @@
       escapeHtml(b.tag) +
       '</span></div></div>' +
       body +
+      MOMO_CONSENT_HTML +
       '<button type="button" class="btn-check" id="btn-check" style="background:' +
       acc +
       '"' +
@@ -870,24 +874,14 @@
           );
         })
         .join('') +
-      '</div><p style="font-size:12px;color:#6F7682;margin:8px 0 4px">Chạm ô dưới để nhập 6 số vé</p><div class="ticket-box"><input id="xskt-in" class="xskt-ticket-input" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" value="' +
+      '</div><p style="font-size:12px;color:#6F7682;margin:8px 0 4px">Nhập hoặc dán 6 số vé (một lần)</p><div class="ticket-box ticket-box-visible"><input id="xskt-in" class="xskt-ticket-visible" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="······" value="' +
       escapeHtml(state.xsktTicket.replace(/\D/g, '')) +
-      '" /><div class="xskt-ticket-face">' +
-      (function () {
-        var d = state.xsktTicket.replace(/\D/g, '');
-        var parts = [];
-        for (var i = 0; i < 6; i++) {
-          parts.push(
-            '<span class="ticket-ch">' + (d[i] ? escapeHtml(d[i]) : '—') + '</span>'
-          );
-        }
-        return parts.join('');
-      })() +
-      '</div></div><p class="sel-hint' +
+      '" /></div><p id="xskt-ticket-hint" class="sel-hint' +
       (state.xsktTicket.replace(/\D/g, '').length === 6 ? ' ok' : '') +
-      '" style="margin-top:6px">' +
+      '" style="margin-top:8px">' +
       (state.xsktTicket.replace(/\D/g, '').length === 6 ? 'Đã nhập đủ 6 số.' : 'Nhập đủ 6 số để dò.') +
       '</p></div>' +
+      MOMO_CONSENT_HTML +
       '<button type="button" class="btn-check" id="btn-check" style="background:#F5C840"' +
       (state.loading ? ' disabled' : '') +
       '>' +
@@ -1160,9 +1154,17 @@
       }
       if (t.id === 'xskt-in') {
         state.xsktTicket = t.value.replace(/\D/g, '').slice(0, 6);
-        t.value = state.xsktTicket;
         state.apiResult = state.checkResult = null;
         render();
+        requestAnimationFrame(function () {
+          var el = document.getElementById('xskt-in');
+          if (!el) return;
+          el.focus();
+          var len = state.xsktTicket.length;
+          try {
+            el.setSelectionRange(len, len);
+          } catch (e) {}
+        });
       }
     });
   }
