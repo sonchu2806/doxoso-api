@@ -33,6 +33,16 @@
 
   var KEY = 'doxoso_saved_tickets';
 
+  /** Logo PNG trong /public/assets (copy từ doxoso-mini) */
+  var LOGO_SRC = {
+    keno: '/assets/vietlott-logos/keno.png',
+    mega: '/assets/vietlott-logos/mega645.png',
+    power: '/assets/vietlott-logos/power655.png',
+    max3d: '/assets/vietlott-logos/max3d.png',
+    max3dpro: '/assets/vietlott-logos/max3dpro.png',
+    lotto535: '/assets/vietlott-logos/lotto535.png',
+  };
+
   var BANNERS = {
     mega: { t: 'Mega 6/45', n: 'Chọn 6 số từ 01-45. Quay thưởng T4, T6, CN.', tag: 'T4 · T6 · CN', bg: '#F3F1FF', b: '#DCCFFF', tg: '#E7E2FF', tc: '#6C58F7' },
     power: { t: 'Power 6/55', n: 'Chọn 6 số từ 01-55. Có Jackpot 1 và Jackpot 2.', tag: 'T3 · T5 · T7', bg: '#EDF6FF', b: '#CFE3FF', tg: '#DBECFF', tc: '#2E7FD6' },
@@ -570,17 +580,28 @@
     } else if (state.product === 'max3d' || state.product === 'max3dpro') {
       var sets = Array.isArray(ar.sets) ? ar.sets : [];
       var matched3d = cr.matched || [];
+      var grouped = groupMax3dSetsForDisplay(sets);
       lines += '<div style="margin-top:10px;font-size:12px;font-weight:700;color:#6D7380">Kết quả quay thưởng</div>';
-      sets.forEach(function (s) {
-        var num = String((s.numbers || []).join('') || '');
-        var hit = matched3d.indexOf(Number(num)) !== -1;
+      grouped.forEach(function (g) {
+        var numsHtml = g.nums
+          .map(function (num) {
+            var hit = matched3d.indexOf(Number(num)) !== -1;
+            return (
+              '<span style="color:' +
+              (hit ? '#34C759' : '#303233') +
+              ';font-weight:700">' +
+              escapeHtml(num) +
+              '</span>'
+            );
+          })
+          .join('<span style="color:#C9CED8;font-weight:600"> · </span>');
         lines +=
-          '<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #EEF1F6;font-size:13px"><span style="color:#727982">' +
-          escapeHtml(String(s.label || '')) +
-          '</span><span style="font-weight:700;color:' +
-          (hit ? '#34C759' : '#303233') +
-          '">' +
-          escapeHtml(num) +
+          '<div style="display:flex;flex-wrap:nowrap;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #EEF1F6;font-size:13px;overflow-x:auto;-webkit-overflow-scrolling:touch">' +
+          '<span style="color:#727982;flex:0 0 auto;max-width:42%">' +
+          escapeHtml(g.label) +
+          '</span>' +
+          '<span style="flex:1 1 auto;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums">' +
+          numsHtml +
           '</span></div>';
       });
     } else if (win.length > 0) {
@@ -645,6 +666,21 @@
     return lines;
   }
 
+  function groupMax3dSetsForDisplay(sets) {
+    if (!Array.isArray(sets) || sets.length === 0) return [];
+    var groups = {};
+    sets.forEach(function (s, idx) {
+      var label = String((s && s.label) || 'Bộ ' + (idx + 1));
+      var groupKey = label.replace(/\s*bộ\s*\d+/i, '').trim() || label;
+      var numStr = String((s && s.numbers && s.numbers.join('')) || '');
+      if (!groups[groupKey]) groups[groupKey] = [];
+      if (numStr) groups[groupKey].push(numStr);
+    });
+    return Object.keys(groups).map(function (k) {
+      return { label: k, nums: groups[k] };
+    });
+  }
+
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, '&amp;')
@@ -677,7 +713,9 @@
           (state.product === it.k ? ' on' : '') +
           '" data-product="' +
           it.k +
-          '"><span style="font-size:10px;font-weight:800;opacity:.85">VL</span>' +
+          '"><img src="' +
+          LOGO_SRC[it.k] +
+          '" alt="" class="product-chip-logo" />' +
           it.l +
           '</button>'
         );
@@ -743,7 +781,9 @@
       b.bg +
       ';border-color:' +
       b.b +
-      '"><div class="banner-logo">VL</div><div><h2>' +
+      '"><div class="banner-logo"><img src="' +
+      (LOGO_SRC[state.product] || LOGO_SRC.keno) +
+      '" alt="" /></div><div><h2>' +
       escapeHtml(b.t) +
       '</h2><p>' +
       escapeHtml(b.n) +
@@ -1108,6 +1148,15 @@
         else if (which === 'pro0') state.pro[0][idx] = v;
         else if (which === 'pro1') state.pro[1][idx] = v;
         state.apiResult = state.checkResult = null;
+        if (v.length === 1 && idx < 2) {
+          var nextInp = panelDo.querySelector('[data-slot="' + which + '-' + (idx + 1) + '"]');
+          if (nextInp) {
+            setTimeout(function () {
+              nextInp.focus();
+              if (typeof nextInp.select === 'function') nextInp.select();
+            }, 0);
+          }
+        }
       }
       if (t.id === 'xskt-in') {
         state.xsktTicket = t.value.replace(/\D/g, '').slice(0, 6);
