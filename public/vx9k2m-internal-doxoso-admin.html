@@ -10,8 +10,9 @@
     h1 { font-size: 1.1rem; font-weight: 700; }
     p { color: #9a9a9a; font-size: 0.9rem; }
     section { background: #1c1c1c; border: 1px solid #333; border-radius: 10px; padding: 14px; margin: 14px 0; }
-    button { background: #2d7ff9; color: #fff; border: none; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; margin: 4px 8px 4px 0; }
+    button { background: #2d7ff9; color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; margin: 6px 8px 6px 0; min-height: 44px; font-size: 0.95rem; touch-action: manipulation; }
     button.secondary { background: #333; }
+    button.warn { background: #8a5a00; }
     pre { background: #0d0d0d; padding: 12px; border-radius: 8px; overflow: auto; font-size: 11px; max-height: 320px; white-space: pre-wrap; word-break: break-all; }
     a { color: #7ab8ff; }
     code { background: #333; padding: 2px 6px; border-radius: 4px; }
@@ -27,6 +28,14 @@
     <button type="button" id="btn-test" class="secondary">GET /test-connection</button>
     <button type="button" id="btn-sb">GET /admin/supabase-status</button>
     <pre id="out">—</pre>
+  </section>
+
+  <section>
+    <h2 style="margin:0 0 10px;font-size:1rem">Đồng bộ dữ liệu hàng ngày</h2>
+    <p>Chạy trên server Railway — máy tính/điện thoại của bạn không cần bật sau khi đã nhấn và thấy phản hồi JSON (chế độ nền). Dùng được trên điện thoại.</p>
+    <button type="button" id="btn-sync-today">Sync hôm nay (nền, khuyến nghị)</button>
+    <button type="button" id="btn-sync-today-wait" class="warn">Sync hôm nay (chờ xong)</button>
+    <p style="margin:8px 0 0;font-size:0.85rem">“Chờ xong” có thể 1–5+ phút; mạng di động/proxy đôi khi cắt kết nối trước khi xong.</p>
   </section>
 
   <section>
@@ -52,6 +61,8 @@
     document.getElementById('btn-health').onclick = function () { get('/health'); };
     document.getElementById('btn-test').onclick = function () { get('/test-connection'); };
     document.getElementById('btn-sb').onclick = function () { get('/admin/supabase-status'); };
+    document.getElementById('btn-sync-today').onclick = function () { get('/admin/sync-today'); };
+    document.getElementById('btn-sync-today-wait').onclick = function () { get('/admin/sync-today?wait=1'); };
   </script>
 </body>
 </html>

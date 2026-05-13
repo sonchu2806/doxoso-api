@@ -44,6 +44,7 @@ const {
   backfillVietlottMonthsToSupabase,
   XSKT_MIEN_BAC_LABEL,
   isMienBacDaiQuery,
+  normalizeDrawDateForSupabase,
 } = vs;
 
 /** Kỳ theo lịch quay (khi Supabase mới có vài dòng — ví dụ Lotto 5/35). */
@@ -346,6 +347,65 @@ app.get('/admin/backfill-vietlott', async (req, res) => {
     products: productList,
     message:
       'Đang backfill nền (có thể 10–60+ phút). Theo dõi log Railway và GET /admin/supabase-status. Thử ?sync=1 khi chạy local. Ví dụ Lotto 15 ngày: ?products=lotto535&days=15',
+  });
+});
+
+/**
+ * Đồng bộ “hôm nay” giống `node sync.js --today`: mỗi Vietlott kỳ hiện tại + XSKT mb/mt/mn.
+ * Mặc định chạy nền (trả JSON ngay, không chờ — tránh timeout WebView).
+ * ?wait=1 — chờ xong rồi trả JSON (có thể 1–5+ phút, dễ timeout proxy).
+ */
+app.get('/admin/sync-today', async (req, res) => {
+  const wait = req.query.wait === '1' || req.query.sync === '1';
+
+  async function job() {
+    for (const product of VIETLOTT_PRODUCT_IDS) {
+      try {
+        await scrapeVietlott(product, null);
+        console.log('[admin/sync-today] vietlott ok', product);
+      } catch (e) {
+        console.warn('[admin/sync-today] vietlott', product, e.message);
+      }
+    }
+    for (const region of ['mb', 'mt', 'mn']) {
+      try {
+        const all = await scrapeAllXSKT(null, region);
+        for (const [dai, row] of Object.entries(all)) {
+          const drawDateNorm = normalizeDrawDateForSupabase(row.drawDate);
+          await saveXSKTToSupabase(dai, drawDateNorm, row);
+        }
+        console.log('[admin/sync-today] xskt', region, Object.keys(all).length, 'đài');
+      } catch (e) {
+        console.warn('[admin/sync-today] xskt', region, e.message);
+      }
+    }
+    console.log('[admin/sync-today] hoàn tất');
+  }
+
+  if (wait) {
+    try {
+      await job();
+      return res.json({
+        success: true,
+        mode: 'wait',
+        message: 'Đã đồng bộ Vietlott (kỳ hiện tại) + XSKT 3 miền vào Supabase.',
+      });
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  }
+
+  setImmediate(function () {
+    job().catch(function (e) {
+      console.error('[admin/sync-today] job', e);
+    });
+  });
+
+  return res.json({
+    success: true,
+    mode: 'background',
+    message:
+      'Đã khởi chạy đồng bộ trên server (Vietlott + XSKT 3 miền). Vài phút sau mở “Supabase status” hoặc xem log Railway. Máy tính/điện thoại của bạn không cần bật sau khi đã nhận phản hồi này.',
   });
 });
 
