@@ -1036,7 +1036,7 @@
       render();
     });
     document.getElementById('nav-scan').addEventListener('click', function () {
-      toast('Quét vé: dùng app gốc (Expo) có camera OCR, hoặc nhập tay số vé tại đây.');
+      toast('Tính năng đang được phát triển');
     });
     var panelDo = document.getElementById('panel-do');
     panelDo.addEventListener('click', function (e) {
