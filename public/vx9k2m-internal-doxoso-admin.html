@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Doxoso · Internal</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; background: #111; color: #e8e8e8; }
+    h1 { font-size: 1.1rem; font-weight: 700; }
+    p { color: #9a9a9a; font-size: 0.9rem; }
+    section { background: #1c1c1c; border: 1px solid #333; border-radius: 10px; padding: 14px; margin: 14px 0; }
+    button { background: #2d7ff9; color: #fff; border: none; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; margin: 4px 8px 4px 0; }
+    button.secondary { background: #333; }
+    pre { background: #0d0d0d; padding: 12px; border-radius: 8px; overflow: auto; font-size: 11px; max-height: 320px; white-space: pre-wrap; word-break: break-all; }
+    a { color: #7ab8ff; }
+    code { background: #333; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Trang nội bộ (không liên kết từ app chính)</h1>
+  <p>Chỉ dùng vận hành. API gọi cùng origin (<code id="origin"></code>). Không có đăng nhập — giữ URL bí mật.</p>
+
+  <section>
+    <h2 style="margin:0 0 10px;font-size:1rem">Kiểm tra nhanh</h2>
+    <button type="button" id="btn-health">GET /health</button>
+    <button type="button" id="btn-test" class="secondary">GET /test-connection</button>
+    <button type="button" id="btn-sb">GET /admin/supabase-status</button>
+    <pre id="out">—</pre>
+  </section>
+
+  <section>
+    <h2 style="margin:0 0 10px;font-size:1rem">Liên kết debug (mở tab mới)</h2>
+    <p><a href="/debug-resolved-url?product=mega" target="_blank" rel="noopener">/debug-resolved-url?product=mega</a></p>
+    <p><a href="/debug-vietlott-html?product=mega" target="_blank" rel="noopener">/debug-vietlott-html?product=mega</a></p>
+    <p><a href="/admin/backfill-vietlott?months=2" target="_blank" rel="noopener">/admin/backfill-vietlott?months=2</a> (cẩn thận: job nền)</p>
+  </section>
+
+  <script>
+    document.getElementById('origin').textContent = location.origin;
+    var pre = document.getElementById('out');
+    function get(path) {
+      pre.textContent = 'Đang tải…';
+      fetch(path)
+        .then(function (r) { return r.text(); })
+        .then(function (t) {
+          try { pre.textContent = JSON.stringify(JSON.parse(t), null, 2); }
+          catch (e) { pre.textContent = t; }
+        })
+        .catch(function (e) { pre.textContent = String(e); });
+    }
+    document.getElementById('btn-health').onclick = function () { get('/health'); };
+    document.getElementById('btn-test').onclick = function () { get('/test-connection'); };
+    document.getElementById('btn-sb').onclick = function () { get('/admin/supabase-status'); };
+  </script>
+</body>
+</html>

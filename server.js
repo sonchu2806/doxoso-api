@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 const cron = require('node-cron');
 const axios = require('axios');
@@ -385,7 +386,7 @@ app.get('/vietlott/:product/list', async (req, res) => {
       } while (!drawDays.includes(current.getDay()));
     }
 
-    cache[listCacheKey] = { data: list, timestamp: Date.now() - CACHE_TTL + 30 * 60 * 1000 };
+    setCache(listCacheKey, list);
     res.json({ success: true, data: list });
   } catch(e) {
     res.status(500).json({ success: false, error: e.message });
@@ -475,6 +476,8 @@ app.get('/debug-fetch-raw', async (req, res) => {
     res.json({ error: e.message, code: e.code });
   }
 });
+
+app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => {

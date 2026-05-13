@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <!-- API: cùng origin khi host trên Railway; mở file local dùng ?api=https://web-production-d8605.up.railway.app -->
+  <meta name="theme-color" content="#F7F7FA" />
+  <title>Dò Số</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, sans-serif;
+      background: #F7F7FA;
+      color: #303233;
+      padding-bottom: 120px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 52px 16px 24px; }
+    h1 { font-size: 18px; font-weight: 800; letter-spacing: -0.5px; margin: 0 0 16px; }
+    .tabs-row { display: flex; gap: 4px; margin-bottom: 16px; }
+    .tab-pill {
+      flex: 1; height: 36px; border-radius: 10px; border: 1px solid transparent;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      background: transparent; color: #B2B7C0;
+    }
+    .tab-pill.on { background: #fff; border-color: #E5E7EB; color: #303233; }
+    .product-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 10px; -webkit-overflow-scrolling: touch; }
+    .product-chip {
+      flex: 0 0 auto; height: 32px; border-radius: 999px; border: 1px solid #E5E7EB;
+      background: #fff; padding: 0 12px; display: flex; align-items: center; gap: 5px;
+      font-size: 12px; font-weight: 600; color: #6E7481; cursor: pointer;
+    }
+    .product-chip.on { border-color: #EB2F98; background: #FDEAF4; color: #EB2F98; font-weight: 700; }
+    .hint { font-size: 11px; color: #B0B5BE; margin-top: 6px; }
+    .card { background: #fff; border-radius: 12px; border: 1px solid #E5E7EB; padding: 12px; margin-bottom: 12px; }
+    .banner { display: flex; gap: 10px; align-items: center; padding: 12px; border-radius: 12px; border: 1px solid; margin-bottom: 12px; }
+    .banner-logo { width: 56px; height: 38px; border-radius: 10px; background: #FFFFFFDD; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; }
+    .banner h2 { margin: 0; font-size: 18px; font-weight: 800; }
+    .banner p { margin: 2px 0 0; font-size: 12px; color: #666C76; }
+    .tag { display: inline-block; margin-top: 4px; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 8px; }
+    .ky-row { display: flex; align-items: center; gap: 8px; min-height: 40px; background: #F2F2F6; border: 1px solid #EBEBEB; border-radius: 8px; padding: 7px 12px; margin-bottom: 12px; cursor: pointer; }
+    .ky-row select { flex: 1; border: none; background: transparent; font-size: 15px; color: #303233; font-weight: 600; }
+    .keno-sub { display: flex; gap: 6px; margin-bottom: 12px; }
+    .keno-sub button {
+      flex: 1; height: 30px; border-radius: 20px; border: 1px solid #E5E7EB; background: #F7F7FA;
+      font-size: 11px; font-weight: 600; color: #8A8F98; cursor: pointer;
+    }
+    .keno-sub button.on { background: #FFF3E8; border-color: #F5943A; color: #D5862E; font-weight: 700; }
+    .text-opts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+    .text-opts span { font-size: 12px; font-weight: 700; color: #6D7380; width: 100%; margin-bottom: 4px; }
+    .opt { min-height: 34px; border-radius: 17px; border: 1px solid #E1E5ED; background: #F7F8FC; padding: 0 12px; font-size: 12px; font-weight: 600; color: #626A77; cursor: pointer; }
+    .opt.on { border-color: #F5943A; background: #FFF1E3; color: #D5862E; font-weight: 700; }
+    .grid-pick { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 8px 0; }
+    .cell {
+      width: 38px; height: 38px; border-radius: 19px; border: 1px solid #C9CED8; background: #F5F6FA;
+      display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; color: #565D69; cursor: pointer;
+    }
+    .cell.sel { border-color: #EB2F98; background: #FDEAF4; font-weight: 700; }
+    .cell.dis { opacity: 0.45; pointer-events: none; }
+    .cell.spec-sel { border-color: #F2BD00; background: #FFF4CE; }
+    .slot-row { display: flex; gap: 8px; justify-content: center; margin: 12px 0; }
+    .slot-row input {
+      width: 44px; height: 44px; border: 1px solid #EBEBEB; border-radius: 8px; text-align: center; font-size: 18px; font-weight: 700;
+    }
+    .pro-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 12px 0; }
+    .btn-check {
+      width: 100%; height: 44px; border-radius: 14px; border: none; color: #fff; font-weight: 700; font-size: 20px;
+      margin: 12px 0; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn-check:disabled { opacity: 0.6; }
+    .region-row { display: flex; gap: 8px; margin-bottom: 10px; }
+    .region-row button { flex: 1; height: 32px; border-radius: 16px; border: 1px solid #D8DEE8; background: #F7F8FC; font-size: 12px; font-weight: 600; color: #5D6470; cursor: pointer; }
+    .region-row button.on { border-color: #EB2F98; background: #FDEAF4; color: #EB2F98; font-weight: 700; }
+    .dai-wrap { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    .dai-wrap button { height: 32px; border-radius: 16px; border: 1px solid #D8DEE8; background: #F7F8FC; padding: 0 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .dai-wrap button.on { border-color: #2D7FF9; background: #EAF2FF; color: #2D7FF9; font-weight: 700; }
+    .ticket-box { height: 58px; border-radius: 10px; border: 1px solid #D9DDE5; background: #F7F7FA; display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 8px; }
+    .ticket-box input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+    .ticket-ch { font-size: 20px; font-weight: 600; color: #9DA4AF; min-width: 16px; text-align: center; }
+    .bottom-nav {
+      position: fixed; left: 0; right: 0; bottom: 0; height: 106px; background: #fff; border-top: 1px solid #E5E7EB;
+      display: flex; align-items: flex-start; justify-content: center; padding-top: 10px; z-index: 50;
+    }
+    .bottom-inner { width: 100%; max-width: 760px; display: flex; position: relative; }
+    .nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; padding-top: 14px; cursor: pointer; }
+    .nav-item .ico { font-size: 28px; margin-bottom: 4px; }
+    .nav-item .lbl { font-size: 11px; text-align: center; font-weight: 600; color: #8A8F98; line-height: 14px; }
+    .nav-item.on .lbl { color: #EB2F98 !important; font-weight: 700; }
+    .nav-item.on .bar { width: 40px; height: 3px; border-radius: 2px; background: #EB2F98; position: absolute; top: 10px; }
+    .nav-scan { width: 168px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding-bottom: 10px; cursor: pointer; }
+    .nav-scan .fab { font-size: 40px; margin-top: -28px; }
+    .nav-scan .pill { margin-top: 4px; background: #EB2F98; border-radius: 999px; padding: 4px 12px; color: #fff; font-size: 10px; font-weight: 700; }
+    .result { margin-top: 12px; background: #fff; border-radius: 12px; border: 1px solid #E8EAF0; padding: 12px; }
+    .result h3 { margin: 0; font-size: 15px; font-weight: 800; }
+    .toast { position: fixed; top: 12px; left: 12px; right: 12px; background: #303233; color: #fff; padding: 12px; border-radius: 10px; font-size: 14px; z-index: 100; display: none; }
+    .saved-card { border-radius: 14px; border: 1px solid #E6DCE0; padding: 12px 12px 12px 14px; margin-bottom: 10px; position: relative; background: #FCFCFE; }
+    .saved-card.win { border-color: #BEE8CF; background: #F2FFF7; }
+    .saved-card .stripe { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: 14px 0 0 14px; background: #6C63FF; }
+    .saved-card.win .stripe { background: #34C759; }
+    .date-grp { color: #6F7682; font-weight: 700; margin: 12px 0 8px; font-size: 14px; }
+    .spinner { width: 20px; height: 20px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: sp 0.7s linear infinite; }
+    @keyframes sp { to { transform: rotate(360deg); } }
+    .hidden { display: none !important; }
+    .sel-hint { font-size: 12px; font-weight: 600; margin-top: 4px; color: #A16B00; }
+    .sel-hint.ok { color: #24A972; }
+  </style>
+</head>
+<body>
+  <div class="toast" id="toast"></div>
+  <div class="wrap" id="main-scroll">
+    <h1>Dò Số</h1>
+    <div class="tabs-row">
+      <button type="button" class="tab-pill on" data-tab="do">Dò số</button>
+      <button type="button" class="tab-pill" data-tab="luu">Lịch sử dò</button>
+    </div>
+    <div id="panel-do"></div>
+    <div id="panel-luu" class="hidden"></div>
+  </div>
+  <div class="bottom-nav">
+    <div class="bottom-inner">
+      <div class="nav-item" data-channel="xskt" id="nav-xskt">
+        <span class="bar hidden" id="bar-xskt"></span>
+        <span class="ico">🎫</span>
+        <span class="lbl">Xổ số<br/>kiến thiết</span>
+      </div>
+      <div class="nav-scan" id="nav-scan">
+        <span class="fab">📷</span>
+        <span class="pill">Scan vé số</span>
+      </div>
+      <div class="nav-item on" data-channel="vietlott" id="nav-vl">
+        <span class="bar" id="bar-vl"></span>
+        <span class="ico">🎯</span>
+        <span class="lbl" style="font-size:12px">Vietlott</span>
+      </div>
+    </div>
+  </div>
+  <script src="/web-app.js"></script>
+</body>
+</html>

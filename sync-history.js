@@ -8,6 +8,8 @@
  *   node sync-history.js
  *   node sync-history.js 30   → 30 ngày (Vietlott không-Keno + XSKT; Keno vẫn dùng env keno days)
  *
+ * `runSyncHistory` được export cho sync.js (mặc định `node sync.js` = backfill giống file này).
+ *
  * Biến môi trường:
  *   SYNC_HISTORY_DAYS — ngày cho sản phẩm không phải Keno + XSKT (mặc định 15)
  *   SYNC_HISTORY_KENO_DAYS — ngày chỉ cho Keno (mặc định 5)
@@ -20,17 +22,22 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const vs = require('./vietlott-scrape');
 
-const DAYS = Math.max(
-  1,
-  Math.min(120, parseInt(process.argv[2] || process.env.SYNC_HISTORY_DAYS || '15', 10))
-);
 const KENO_DAYS = Math.max(
   1,
   Math.min(120, parseInt(process.env.SYNC_HISTORY_KENO_DAYS || '5', 10))
 );
 const SKIP_KENO = process.env.SYNC_HISTORY_SKIP_KENO === '1';
 
-async function main() {
+/**
+ * @param {string[]} [argvSlice] — giống process.argv.slice(2) (vd. ['30'] cho 30 ngày). Mặc định slice từ process.argv.
+ */
+async function runSyncHistory(argvSlice) {
+  const slice = Array.isArray(argvSlice) ? argvSlice : process.argv.slice(2);
+  const DAYS = Math.max(
+    1,
+    Math.min(120, parseInt(slice[0] || process.env.SYNC_HISTORY_DAYS || '15', 10))
+  );
+
   if (
     !process.env.SUPABASE_URL ||
     (!process.env.SUPABASE_ANON_KEY && !process.env.SUPABASE_SERVICE_ROLE_KEY)
@@ -77,7 +84,11 @@ async function main() {
   console.log('[sync-history] Hoàn tất');
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+module.exports = { runSyncHistory };
+
+if (require.main === module) {
+  runSyncHistory(process.argv.slice(2)).catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}
