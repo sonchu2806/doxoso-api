@@ -128,7 +128,21 @@
     .hidden { display: none !important; }
     .sel-hint { font-size: 12px; font-weight: 600; margin-top: 4px; color: #A16B00; }
     .sel-hint.ok { color: #24A972; }
-  </style>
+    .saved-swipe-outer { position: relative; margin-bottom: 10px; border-radius: 14px; overflow: hidden; }
+    .saved-swipe-delete {
+      position: absolute; right: 0; top: 0; bottom: 0; width: 76px; z-index: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: #FFEEF0; border: 1px solid #FFD7DE; border-radius: 14px;
+    }
+    .saved-swipe-delete .btn-saved-del {
+      border: none; background: #D64545; color: #fff; font-weight: 700; font-size: 13px;
+      padding: 8px 14px; border-radius: 10px; cursor: pointer;
+    }
+    .saved-swipe-front {
+      position: relative; z-index: 1; transition: transform 0.18s ease-out;
+      will-change: transform;
+    }
+    .saved-swipe-front .saved-card { margin-bottom: 0; }
 </head>
 <body>
   <div class="toast" id="toast"></div>

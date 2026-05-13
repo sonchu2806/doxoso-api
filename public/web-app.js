@@ -404,6 +404,20 @@
     }
   }
 
+  function removeSavedTicket(createdAt) {
+    if (!createdAt) return;
+    try {
+      var raw = localStorage.getItem(KEY);
+      var arr = raw ? JSON.parse(raw) : [];
+      var next = arr.filter(function (x) {
+        return x.createdAt !== createdAt;
+      });
+      localStorage.setItem(KEY, JSON.stringify(next));
+    } catch (e) {
+      console.warn(e);
+    }
+  }
+
   function loadKyList() {
     var p = state.product;
     if (['keno', 'mega', 'power', 'max3d', 'max3dpro', 'lotto535'].indexOf(p) === -1) return;
@@ -526,6 +540,13 @@
     return out.join('');
   }
 
+  /** Bỏ tiền tố "Giải " trùng với nhãn giải ở phần kết quả chi tiết. */
+  function formatPrizeDisplay(prize) {
+    return String(prize == null ? '' : prize)
+      .replace(/^Giải\s+/i, '')
+      .trim();
+  }
+
   function resultHTML() {
     if (!state.apiResult || !state.checkResult) return '';
     var cr = state.checkResult;
@@ -546,7 +567,7 @@
       '">' +
       (cr.prize ? 'Trúng' : 'Không trúng') +
       '</div>';
-    if (cr.prize) lines += '<div style="margin-top:2px;font-size:12px;color:#7B818D">Giải: ' + escapeHtml(cr.prize) + '</div>';
+    if (cr.prize) lines += '<div style="margin-top:2px;font-size:12px;color:#7B818D">' + escapeHtml(formatPrizeDisplay(cr.prize)) + '</div>';
     lines += '</div>';
     if (isText) {
       var kmap = {
@@ -766,8 +787,6 @@
           '</div></div>';
       } else {
         body += gridHTML(80, 10, acc, true);
-        body +=
-          '<p class="sel-hint" style="margin-top:4px">Chọn từ 1 đến 10 số (theo app gốc). Đủ số rồi có thể dò.</p>';
       }
     } else if (state.product === 'max3d') body += slotsHTML('m3');
     else if (state.product === 'max3dpro') body += '<div class="pro-row">' + slotsHTML('pro0') + '<span style="font-size:22px;font-weight:700;color:#565D69">-</span>' + slotsHTML('pro1') + '</div>';
@@ -921,7 +940,7 @@
       '">' +
       (cr.prize ? 'Trúng' : 'Không trúng') +
       '</div>';
-    if (cr.prize) lines += '<div style="font-size:12px;margin-top:4px">' + escapeHtml(cr.prize) + '</div>';
+    if (cr.prize) lines += '<div style="font-size:12px;margin-top:4px">' + escapeHtml(formatPrizeDisplay(cr.prize)) + '</div>';
     lines += '</div><p style="margin-top:8px">Vé của bạn: ' + escapeHtml(state.xsktTicket) + '</p>';
     lines += '<div style="margin-top:10px;font-size:12px;font-weight:700;color:#6D7380">Danh sách số trúng</div>';
     prizes.forEach(function (p) {
@@ -981,7 +1000,13 @@
               })
               .join(' ')
           : it.ticketNumber || '';
+        var ca = encodeURIComponent(String(it.createdAt || ''));
         html +=
+          '<div class="saved-swipe-outer">' +
+          '<div class="saved-swipe-delete"><button type="button" class="btn-saved-del" data-ca="' +
+          ca +
+          '">Xóa</button></div>' +
+          '<div class="saved-swipe-front">' +
           '<div class="saved-card' +
           (win ? ' win' : '') +
           '"><div class="stripe"></div><div style="padding-left:8px"><div style="font-weight:800;font-size:14px;color:' +
@@ -991,8 +1016,10 @@
           '</div><div style="font-weight:700;margin-top:2px">' +
           escapeHtml(nums || '—') +
           '</div>' +
-          (win ? '<div style="color:#1E9E57;font-size:12px;font-weight:700;margin-top:4px">Trúng: ' + escapeHtml(it.prize) + '</div>' : '') +
-          '</div></div>';
+          (win
+            ? '<div style="color:#1E9E57;font-size:12px;font-weight:700;margin-top:4px">Trúng: ' + escapeHtml(formatPrizeDisplay(it.prize)) + '</div>'
+            : '') +
+          '</div></div></div></div>';
       });
     });
     return html;
@@ -1129,6 +1156,19 @@
         render();
       }
     });
+    panelDo.addEventListener('focusin', function (e) {
+      var t = e.target;
+      if (!t || !t.getAttribute || t.getAttribute('data-slot') == null) return;
+      var val = String(t.value || '');
+      if (!val.length) return;
+      setTimeout(function () {
+        try {
+          t.setSelectionRange(0, val.length);
+        } catch (err) {
+          if (typeof t.select === 'function') t.select();
+        }
+      }, 0);
+    });
     panelDo.addEventListener('input', function (e) {
       var t = e.target;
       var slot = t.getAttribute('data-slot');
@@ -1142,31 +1182,123 @@
         else if (which === 'pro0') state.pro[0][idx] = v;
         else if (which === 'pro1') state.pro[1][idx] = v;
         state.apiResult = state.checkResult = null;
-        if (v.length === 1 && idx < 2) {
-          var nextInp = panelDo.querySelector('[data-slot="' + which + '-' + (idx + 1) + '"]');
-          if (nextInp) {
-            setTimeout(function () {
-              nextInp.focus();
-              if (typeof nextInp.select === 'function') nextInp.select();
-            }, 0);
+        if (v.length === 1) {
+          var nextKey = null;
+          if (which === 'm3' && idx < 2) nextKey = which + '-' + (idx + 1);
+          else if (which === 'pro0' && idx < 2) nextKey = which + '-' + (idx + 1);
+          else if (which === 'pro0' && idx === 2) nextKey = 'pro1-0';
+          else if (which === 'pro1' && idx < 2) nextKey = which + '-' + (idx + 1);
+          if (nextKey) {
+            var nextInp = panelDo.querySelector('[data-slot="' + nextKey + '"]');
+            if (nextInp) {
+              setTimeout(function () {
+                nextInp.focus();
+                try {
+                  nextInp.setSelectionRange(0, nextInp.value.length);
+                } catch (err) {
+                  if (typeof nextInp.select === 'function') nextInp.select();
+                }
+              }, 0);
+            }
           }
         }
       }
       if (t.id === 'xskt-in') {
-        state.xsktTicket = t.value.replace(/\D/g, '').slice(0, 6);
+        var digits = String(t.value).replace(/\D/g, '').slice(0, 6);
+        state.xsktTicket = digits;
+        if (t.value !== digits) t.value = digits;
         state.apiResult = state.checkResult = null;
-        render();
-        requestAnimationFrame(function () {
-          var el = document.getElementById('xskt-in');
-          if (!el) return;
-          el.focus();
-          var len = state.xsktTicket.length;
-          try {
-            el.setSelectionRange(len, len);
-          } catch (e) {}
-        });
+        var res = panelDo.querySelector('.result');
+        if (res) res.remove();
+        var hint = document.getElementById('xskt-ticket-hint');
+        if (hint) {
+          hint.classList.toggle('ok', digits.length === 6);
+          hint.textContent = digits.length === 6 ? 'Đã nhập đủ 6 số.' : 'Nhập đủ 6 số để dò.';
+        }
       }
     });
+    var panelLuu = document.getElementById('panel-luu');
+    var swipeDelW = 76;
+    var swipeRow = null;
+    function closestSwipeFront(fromEl) {
+      var el = fromEl;
+      while (el && el !== panelLuu) {
+        if (el.nodeType === 1 && el.classList && el.classList.contains('saved-swipe-front')) return el;
+        el = el.parentElement;
+      }
+      return null;
+    }
+    function resetSavedSwipeExcept(keep) {
+      forEachNode(panelLuu.querySelectorAll('.saved-swipe-front'), function (f) {
+        if (f !== keep) {
+          f.style.transition = '';
+          f.style.transform = '';
+        }
+      });
+    }
+    panelLuu.addEventListener('click', function (e) {
+      var el = e.target;
+      while (el && el !== panelLuu) {
+        if (el.nodeType === 1 && el.classList && el.classList.contains('btn-saved-del')) {
+          var rawCa = el.getAttribute('data-ca');
+          if (rawCa) removeSavedTicket(decodeURIComponent(rawCa));
+          render();
+          e.preventDefault();
+          return;
+        }
+        el = el.parentElement;
+      }
+    });
+    panelLuu.addEventListener(
+      'touchstart',
+      function (e) {
+        var front = closestSwipeFront(e.target);
+        if (!front) return;
+        var touch = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]);
+        if (!touch) return;
+        swipeRow = { front: front, startX: touch.clientX, startY: touch.clientY, lastDx: 0, active: true };
+        front.style.transition = 'none';
+        resetSavedSwipeExcept(front);
+      },
+      { passive: true }
+    );
+    panelLuu.addEventListener(
+      'touchmove',
+      function (e) {
+        if (!swipeRow || !swipeRow.active || !swipeRow.front) return;
+        var touch = e.touches && e.touches[0];
+        if (!touch) return;
+        var dx = swipeRow.startX - touch.clientX;
+        var dy = Math.abs(touch.clientY - swipeRow.startY);
+        if (dy > 14 && dy > Math.abs(dx) * 1.15) {
+          swipeRow.active = false;
+          swipeRow.front.style.transition = '';
+          swipeRow.front.style.transform = '';
+          swipeRow = null;
+          return;
+        }
+        if (dx > 0) {
+          swipeRow.lastDx = dx;
+          swipeRow.front.style.transform = 'translateX(' + -Math.min(dx, swipeDelW) + 'px)';
+          if (dx > 6) e.preventDefault();
+        }
+      },
+      { passive: false }
+    );
+    function endSavedSwipe() {
+      if (!swipeRow || !swipeRow.front) {
+        swipeRow = null;
+        return;
+      }
+      var front = swipeRow.front;
+      var dx = swipeRow.lastDx || 0;
+      swipeRow = null;
+      front.style.transition = '';
+      if (dx > 34) front.style.transform = 'translateX(-' + swipeDelW + 'px)';
+      else front.style.transform = '';
+    }
+    panelLuu.addEventListener('touchend', endSavedSwipe, { passive: true });
+    panelLuu.addEventListener('touchcancel', endSavedSwipe, { passive: true });
   }
 
   function doCheck() {
