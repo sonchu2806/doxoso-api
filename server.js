@@ -361,7 +361,7 @@ app.get('/admin/sync-today', async (req, res) => {
   async function job() {
     for (const product of VIETLOTT_PRODUCT_IDS) {
       try {
-        await scrapeVietlott(product, null);
+        await scrapeVietlott(product, null, { forceNetwork: true });
         console.log('[admin/sync-today] vietlott ok', product);
       } catch (e) {
         console.warn('[admin/sync-today] vietlott', product, e.message);
@@ -413,7 +413,7 @@ app.get('/admin/scrape-all', async (req, res) => {
   const results = {};
   for (const product of VIETLOTT_PRODUCT_IDS) {
     try {
-      const result = await scrapeVietlott(product, null);
+      const result = await scrapeVietlott(product, null, { forceNetwork: true });
       if (result?.kySo) {
         await saveVietlottToSupabase(product, result.kySo, result);
         results[product] = { ok: true, kySo: result.kySo };

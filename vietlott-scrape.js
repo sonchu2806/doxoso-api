@@ -1097,14 +1097,21 @@ async function getXSKTFromSupabase(dai, drawDate) {
   }
 }
 
-async function scrapeVietlott(product, kyso) {
+/**
+ * @param {string|null} kyso — null = kỳ hiện tại theo getCurrentInfo.
+ * @param {{ forceNetwork?: boolean }} [opts] — forceNetwork: bỏ cache RAM + không trả sẵn từ Supabase (luôn ưu tiên gọi vietlott), dùng cho sync / job cập nhật.
+ */
+async function scrapeVietlott(product, kyso, opts) {
   if (!VIETLOTT_PRODUCT_IDS.includes(product)) {
     throw new Error('Sản phẩm không phải Vietlott hoặc không được hỗ trợ: ' + product);
   }
 
+  const forceNetwork = !!(opts && opts.forceNetwork);
   const cacheKey = 'vl_' + product + (kyso ? '_' + kyso : '');
-  const cached = getCache(cacheKey);
-  if (cached) return cached;
+  if (!forceNetwork) {
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+  }
 
   let info = null;
   if (!kyso) {
@@ -1113,14 +1120,14 @@ async function scrapeVietlott(product, kyso) {
       info?.currentKy != null && String(info.currentKy).trim() !== ''
         ? padVietlottId(product, info.currentKy)
         : '';
-    if (curId) {
+    if (curId && !forceNetwork) {
       const sbData = await getVietlottFromSupabase(product, curId);
       if (sbData) {
         setCache(cacheKey, sbData);
         return sbData;
       }
     }
-  } else {
+  } else if (!forceNetwork) {
     const sbData = await getVietlottFromSupabase(product, kyso);
     if (sbData) {
       setCache(cacheKey, sbData);

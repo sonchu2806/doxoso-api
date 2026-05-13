@@ -35,7 +35,7 @@ async function runTodayOnly() {
 
   for (const product of vs.VIETLOTT_PRODUCT_IDS) {
     try {
-      const data = await vs.scrapeVietlott(product, null);
+      const data = await vs.scrapeVietlott(product, null, { forceNetwork: true });
       // draw_date được ghi trong saveVietlottToSupabase (normalizeDrawDateForSupabase)
       console.log(
         '[vietlott]',
