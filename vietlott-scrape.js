@@ -885,6 +885,52 @@ async function getLatestVietlottFromSupabase(product) {
 }
 
 /**
+ * Danh sách kỳ gần đây từ Supabase — dùng cho dropdown /api khi getCurrentInfo không gọi được từ Railway.
+ */
+async function getVietlottKyListFromSupabase(product, limit) {
+  if (!supabase || !VIETLOTT_PRODUCT_IDS.includes(product)) return null;
+  const lim = Math.min(500, Math.max(10, limit || 90));
+  try {
+    const { data, error } = await supabase
+      .from('vietlott_results')
+      .select('kyso, draw_date')
+      .eq('product', product)
+      .not('kyso', 'is', null)
+      .order('kyso', { ascending: false })
+      .limit(lim);
+    if (error) {
+      console.warn('[supabase] ky list query error', product, error.message);
+      return null;
+    }
+    if (!Array.isArray(data) || data.length === 0) return null;
+    const DAY_NAMES = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+    const out = [];
+    for (const row of data) {
+      const ks = String(row.kyso || '').trim();
+      if (!ks) continue;
+      const dateStr = drawDateFromPg(row.draw_date);
+      let drawDay = '';
+      if (dateStr && /^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
+        const parts = dateStr.split('/');
+        const dt = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+        if (!Number.isNaN(dt.getTime())) drawDay = DAY_NAMES[dt.getDay()];
+      }
+      out.push({
+        kyso: ks,
+        date: dateStr || '—',
+        drawDay: drawDay || '—',
+      });
+    }
+    if (out.length === 0) return null;
+    console.log('[supabase] ky list', product, out.length, 'rows');
+    return out;
+  } catch (e) {
+    console.warn('[supabase] ky list', product, e.message);
+    return null;
+  }
+}
+
+/**
  * Keno không kyso: dùng kỳ từ winning-number-keno (getCurrentInfo) + dò vài kỳ kế tiếp bằng axios.
  * Tránh probe hàng chục URL trước khi thử đúng trang chi tiết (gây load rất lâu).
  */
@@ -2108,6 +2154,7 @@ module.exports = {
   saveXSKTToSupabase,
   getVietlottFromSupabase,
   getLatestVietlottFromSupabase,
+  getVietlottKyListFromSupabase,
   getXSKTFromSupabase,
   getCurrentInfo,
   getUrlFromKySo,

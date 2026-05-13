@@ -31,6 +31,7 @@ const {
   saveXSKTToSupabase,
   getVietlottFromSupabase,
   getXSKTFromSupabase,
+  getVietlottKyListFromSupabase,
   getCurrentInfo,
   getUrlFromKySo,
   padVietlottId,
@@ -359,36 +360,44 @@ app.get('/vietlott/:product/list', async (req, res) => {
     const cachedList = getCache(listCacheKey);
     if (cachedList) return res.json({ success: true, data: cachedList });
 
-    const info = await getCurrentInfo(product);
-    if (!info.currentKy) throw new Error('Không lấy được kỳ hiện tại');
-
-    const currentKyNum = parseInt(info.currentKy);
-    const [dd, mm, yyyy] = info.currentDate.split('/');
-    let current = new Date(parseInt(yyyy), parseInt(mm)-1, parseInt(dd));
-
-    const DAY_NAMES = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
     const limit = product === 'keno' ? 200 : product === 'lotto535' ? 180 : 90;
-    const list = [];
-    let kyNum = currentKyNum;
 
-    for (let i = 0; i < limit; i++) {
-      const d = String(current.getDate()).padStart(2, '0');
-      const m2 = String(current.getMonth() + 1).padStart(2, '0');
-      const y2 = current.getFullYear();
-      list.push({
-        kyso: String(kyNum).padStart(5, '0'),
-        date: d + '/' + m2 + '/' + y2,
-        drawDay: DAY_NAMES[current.getDay()],
-      });
-      kyNum--;
-      do {
-        current.setDate(current.getDate() - 1);
-      } while (!drawDays.includes(current.getDay()));
+    let list = await getVietlottKyListFromSupabase(product, limit);
+    let source = list && list.length ? 'supabase' : null;
+
+    if (!list || list.length === 0) {
+      const info = await getCurrentInfo(product);
+      if (!info.currentKy) throw new Error('Không lấy được kỳ hiện tại (và Supabase không có danh sách kỳ)');
+
+      const currentKyNum = parseInt(info.currentKy, 10);
+      const [dd, mm, yyyy] = info.currentDate.split('/');
+      let current = new Date(parseInt(yyyy, 10), parseInt(mm, 10) - 1, parseInt(dd, 10));
+
+      const DAY_NAMES = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+      list = [];
+      let kyNum = currentKyNum;
+
+      for (let i = 0; i < limit; i++) {
+        const d = String(current.getDate()).padStart(2, '0');
+        const m2 = String(current.getMonth() + 1).padStart(2, '0');
+        const y2 = current.getFullYear();
+        list.push({
+          kyso: padVietlottId(product, String(kyNum)),
+          date: d + '/' + m2 + '/' + y2,
+          drawDay: DAY_NAMES[current.getDay()],
+        });
+        kyNum--;
+        do {
+          current.setDate(current.getDate() - 1);
+        } while (!drawDays.includes(current.getDay()));
+      }
+      source = 'vietlott_live';
     }
 
+    if (source) console.log('[vietlott list]', product, 'source=', source, 'count=', list.length);
     setCache(listCacheKey, list);
     res.json({ success: true, data: list });
-  } catch(e) {
+  } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
