@@ -884,30 +884,42 @@ async function getLatestVietlottFromSupabase(product) {
   }
 }
 
+/** Một số DB lưu product khác slug web (mega645, power655, …). */
+const VIETLOTT_KY_LIST_PRODUCT_ALIASES = {
+  mega: ['mega', 'mega645'],
+  power: ['power', 'power655'],
+  max3d: ['max3d'],
+  max3dpro: ['max3dpro'],
+  lotto535: ['lotto535'],
+  keno: ['keno'],
+};
+
 /**
  * Danh sách kỳ gần đây từ Supabase — dùng cho dropdown /api khi getCurrentInfo không gọi được từ Railway.
  */
 async function getVietlottKyListFromSupabase(product, limit) {
   if (!supabase || !VIETLOTT_PRODUCT_IDS.includes(product)) return null;
   const lim = Math.min(500, Math.max(10, limit || 90));
+  const aliases = VIETLOTT_KY_LIST_PRODUCT_ALIASES[product] || [product];
   try {
     const { data, error } = await supabase
       .from('vietlott_results')
-      .select('kyso, draw_date')
-      .eq('product', product)
+      .select('kyso, draw_date, product')
+      .in('product', aliases)
       .not('kyso', 'is', null)
-      .order('kyso', { ascending: false })
-      .limit(lim);
+      .order('draw_date', { ascending: false })
+      .limit(Math.min(lim * 4, 600));
     if (error) {
       console.warn('[supabase] ky list query error', product, error.message);
       return null;
     }
     if (!Array.isArray(data) || data.length === 0) return null;
     const DAY_NAMES = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
-    const out = [];
+    const byKy = new Map();
     for (const row of data) {
       const ks = String(row.kyso || '').trim();
       if (!ks) continue;
+      if (byKy.has(ks)) continue;
       const dateStr = drawDateFromPg(row.draw_date);
       let drawDay = '';
       if (dateStr && /^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
@@ -915,15 +927,21 @@ async function getVietlottKyListFromSupabase(product, limit) {
         const dt = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
         if (!Number.isNaN(dt.getTime())) drawDay = DAY_NAMES[dt.getDay()];
       }
-      out.push({
+      byKy.set(ks, {
         kyso: ks,
         date: dateStr || '—',
         drawDay: drawDay || '—',
       });
     }
-    if (out.length === 0) return null;
-    console.log('[supabase] ky list', product, out.length, 'rows');
-    return out;
+    const out = Array.from(byKy.values()).sort(function (a, b) {
+      var na = parseInt(String(a.kyso).replace(/\D/g, ''), 10) || 0;
+      var nb = parseInt(String(b.kyso).replace(/\D/g, ''), 10) || 0;
+      return nb - na;
+    });
+    const sliced = out.slice(0, lim);
+    if (sliced.length === 0) return null;
+    console.log('[supabase] ky list', product, sliced.length, 'rows (aliases:', aliases.join(','), ')');
+    return sliced;
   } catch (e) {
     console.warn('[supabase] ky list', product, e.message);
     return null;

@@ -61,6 +61,35 @@
     .opt { min-height: 34px; border-radius: 17px; border: 1px solid #E1E5ED; background: #F7F8FC; padding: 0 12px; font-size: 12px; font-weight: 600; color: #626A77; cursor: pointer; }
     .opt.on { border-color: #F5943A; background: #FFF1E3; color: #D5862E; font-weight: 700; }
     .grid-pick { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 8px 0; }
+    .grid-lotto535-spec {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(34px, 40px));
+      gap: 7px;
+      justify-content: center;
+      width: fit-content;
+      max-width: 100%;
+      margin: 8px auto 0;
+      padding: 0 6px;
+    }
+    .grid-lotto535-main {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(34px, 40px));
+      gap: 7px;
+      justify-content: center;
+      width: fit-content;
+      max-width: 100%;
+      margin: 12px auto 0;
+      padding: 0 6px;
+    }
+    .grid-lotto535-spec .cell,
+    .grid-lotto535-main .cell {
+      width: 100%;
+      max-width: 40px;
+      height: 40px;
+      margin: 0;
+      flex: none;
+      box-sizing: border-box;
+    }
     .cell {
       width: 38px; height: 38px; border-radius: 19px; border: 1px solid #C9CED8; background: #F5F6FA;
       display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; color: #565D69; cursor: pointer;
