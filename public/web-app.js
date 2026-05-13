@@ -573,7 +573,7 @@
       '">' +
       (cr.prize ? 'Trúng' : 'Không trúng') +
       '</div>';
-    if (cr.prize) lines += '<div style="margin-top:2px;font-size:12px;color:#7B818D">Giải: ' + escapeHtml(cr.prize) + '</div>';
+    if (cr.prize) lines += '<div style="margin-top:2px;font-size:12px;color:#7B818D">' + escapeHtml(cr.prize) + '</div>';
     lines += '</div>';
     if (isText) {
       var kmap = {
