@@ -65,13 +65,7 @@ function normalizeDrawDateForSupabase(s) {
   if (m) {
     return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
   }
-  const parsed = new Date(t);
-  if (!Number.isNaN(parsed.getTime())) {
-    const y = parsed.getFullYear();
-    const mo = String(parsed.getMonth() + 1).padStart(2, '0');
-    const d = String(parsed.getDate()).padStart(2, '0');
-    return y + '-' + mo + '-' + d;
-  }
+  // Không dùng Date.parse — với chuỗi lạ dễ lệch múi giờ / mm-dd (Mỹ) so với dd/mm (VN).
   return '';
 }
 
@@ -390,9 +384,24 @@ async function fetchHTML(url) {
   }
 }
 
-function extractKyAndDateFromText(blob) {
+function extractKyAndDateFromText(blob, kyHint) {
   const text = String(blob || '').replace(/\s+/g, ' ');
   const kySo = (text.match(/#\s*(\d+)/) || [])[1] || '';
+  const hint = kyHint != null ? String(kyHint).replace(/\D/g, '') : '';
+  if (hint && hint.length >= 4) {
+    const afterKy = new RegExp(
+      '(?:#\\s*' + hint + '\\b|\\b' + hint + '\\b)[^\\d]{0,220}?(\\d{2}/\\d{2}/\\d{4})',
+      'im'
+    );
+    const m1 = text.match(afterKy);
+    if (m1) return { kySo: kySo || hint, drawDate: m1[1] };
+    const beforeKy = new RegExp(
+      '(\\d{2}/\\d{2}/\\d{4})[^\\d]{0,220}?(?:#\\s*' + hint + '\\b|\\b' + hint + '\\b)',
+      'im'
+    );
+    const m2 = text.match(beforeKy);
+    if (m2) return { kySo: kySo || hint, drawDate: m2[1] };
+  }
   const drawDate = (text.match(/(\d{2}\/\d{2}\/\d{4})/) || [])[1] || '';
   return { kySo, drawDate };
 }
@@ -630,7 +639,10 @@ function parseOfficialKenoFromVietlott($, kysoTarget) {
   if (unique.length < 10) return null;
   if (!kySo && kysoTarget) kySo = String(kysoTarget).replace(/\D/g, '');
   if (!drawDate || !kySo) {
-    const { kySo: k2, drawDate: d2 } = extractKyAndDateFromText($('body').text());
+    const hint = String(kysoTarget || kySo || '')
+      .replace(/\D/g, '')
+      .trim();
+    const { kySo: k2, drawDate: d2 } = extractKyAndDateFromText($('body').text(), hint || undefined);
     if (!kySo) kySo = k2;
     if (!drawDate) drawDate = d2;
   }
@@ -907,8 +919,8 @@ async function getVietlottKyListFromSupabase(product, limit) {
       .select('kyso, draw_date, product')
       .in('product', aliases)
       .not('kyso', 'is', null)
-      .order('draw_date', { ascending: false })
-      .limit(Math.min(lim * 4, 600));
+      .order('kyso', { ascending: false })
+      .limit(Math.min(Math.max(lim, 50), 800));
     if (error) {
       console.warn('[supabase] ky list query error', product, error.message);
       return null;
@@ -1922,6 +1934,10 @@ async function warmVietlottRecentToSupabase() {
     return;
   }
   const depth = Math.max(1, Math.min(40, parseInt(process.env.VIETLOTT_WARM_DEPTH || '10', 10)));
+  const lotto535WarmMin = Math.max(
+    15,
+    Math.min(60, parseInt(process.env.VIETLOTT_LOTTO535_WARM_DAYS || '18', 10))
+  );
   const delayMs = Math.max(200, Math.min(3000, parseInt(process.env.VIETLOTT_WARM_DELAY_MS || '500', 10)));
 
   for (const product of VIETLOTT_PRODUCT_IDS) {
@@ -1934,7 +1950,7 @@ async function warmVietlottRecentToSupabase() {
         product === 'keno'
           ? Math.min(depth, 12)
           : product === 'lotto535'
-            ? Math.min(Math.max(depth, 20), 45)
+            ? Math.min(Math.max(depth, lotto535WarmMin), 60)
             : depth;
       for (let i = 0; i < maxBack; i++) {
         const n = cur - i;
@@ -1960,7 +1976,7 @@ async function warmVietlottRecentToSupabase() {
 function estimateBackfillSteps(product, months) {
   const m = Math.max(1, Math.min(24, months));
   if (product === 'lotto535') {
-    return Math.ceil(m * 31 * 2.1);
+    return Math.max(Math.ceil(m * 31), Math.ceil(m * 31 * 1.2));
   }
   if (product === 'keno') {
     const cap = Math.max(500, Math.min(20000, parseInt(process.env.VIETLOTT_BACKFILL_KENO_MAX || '6000', 10)));
@@ -1975,7 +1991,7 @@ function estimateBackfillStepsForDays(product, days) {
   const d = Math.max(1, Math.min(120, days));
   const m = d / 30;
   if (product === 'lotto535') {
-    return Math.ceil(m * 31 * 2.1);
+    return Math.max(d, Math.ceil(d * 1.25));
   }
   if (product === 'keno') {
     const cap = Math.max(

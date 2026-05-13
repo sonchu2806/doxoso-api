@@ -118,6 +118,21 @@
     });
   }
 
+  /** dd/mm/yyyy — hỗ trợ ISO yyyy-mm-dd từ API. */
+  function formatKyRowDateVi(raw) {
+    var t = String(raw || '').trim();
+    if (!t || t === '—') return t || '';
+    var iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return iso[3] + '/' + iso[2] + '/' + iso[1];
+    var slash = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (slash) {
+      var dd = ('0' + slash[1]).slice(-2);
+      var mm = ('0' + slash[2]).slice(-2);
+      return dd + '/' + mm + '/' + slash[3];
+    }
+    return t;
+  }
+
   function fetchVietlott(product, kyso) {
     var u =
       kyso && String(kyso).trim()
@@ -565,7 +580,7 @@
       '<div class="result"><h3>Kết quả</h3><p style="color:#8A8F98;font-size:12px;margin:4px 0 0">Kỳ: ' +
       (ar.kySo || '—') +
       ' · Ngày: ' +
-      (ar.drawDate || '—') +
+      (ar.drawDate ? escapeHtml(formatKyRowDateVi(ar.drawDate)) : '—') +
       '</p>';
     lines +=
       '<div style="margin-top:10px;padding:10px;border-radius:8px;background:#F7F8FC"><div style="color:#6D7380;font-size:12px;font-weight:700">Kết luận</div><div style="margin-top:4px;font-weight:800;color:' +
@@ -760,7 +775,7 @@
         '</option>' +
         state.kyList
           .map(function (x) {
-            return '<option value="' + escapeHtml(x.kyso) + '"' + (state.ky === x.kyso ? ' selected' : '') + '>Kỳ #' + escapeHtml(x.kyso) + ' · ' + escapeHtml(x.date) + '</option>';
+            return '<option value="' + escapeHtml(x.kyso) + '"' + (state.ky === x.kyso ? ' selected' : '') + '>Kỳ #' + escapeHtml(x.kyso) + ' · ' + escapeHtml(formatKyRowDateVi(x.date)) + '</option>';
           })
           .join('') +
         '</select></label>';

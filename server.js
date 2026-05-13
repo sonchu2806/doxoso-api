@@ -397,7 +397,7 @@ app.get('/vietlott/:product/list', async (req, res) => {
     const cachedList = getCache(listCacheKey);
     if (cachedList) return res.json({ success: true, data: cachedList });
 
-    const limit = product === 'keno' ? 200 : product === 'lotto535' ? 180 : 90;
+    const limit = product === 'keno' ? 300 : product === 'lotto535' ? 180 : 90;
 
     let list = await getVietlottKyListFromSupabase(product, limit);
     let source = null;
@@ -478,6 +478,20 @@ if (process.env.VIETLOTT_WARM_ON_BOOT !== '0') {
   setTimeout(() => {
     warmVietlottRecentToSupabase().catch((e) => console.warn('[warm vietlott boot]', e.message));
   }, bootMs);
+  if (supabase && process.env.VIETLOTT_BOOT_LOTTO535_DAYS !== '0') {
+    const lottoBootDays = Math.min(
+      120,
+      Math.max(0, parseInt(process.env.VIETLOTT_BOOT_LOTTO535_DAYS || '15', 10) || 15)
+    );
+    if (lottoBootDays > 0) {
+      const lottoMs = bootMs + 45000;
+      setTimeout(() => {
+        backfillVietlottMonthsToSupabase(1, { products: ['lotto535'], days: lottoBootDays })
+          .then((s) => console.log('[boot lotto535 backfill] done', s.byProduct && s.byProduct.lotto535))
+          .catch((e) => console.warn('[boot lotto535 backfill]', e.message));
+      }, lottoMs);
+    }
+  }
 }
 
 app.get('/debug-vietlott-html', async (req, res) => {
