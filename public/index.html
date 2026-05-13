@@ -79,19 +79,28 @@
     .dai-wrap { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
     .dai-wrap button { height: 32px; border-radius: 16px; border: 1px solid #D8DEE8; background: #F7F8FC; padding: 0 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
     .dai-wrap button.on { border-color: #2D7FF9; background: #EAF2FF; color: #2D7FF9; font-weight: 700; }
-    .ticket-box { height: 58px; border-radius: 10px; border: 1px solid #D9DDE5; background: #F7F7FA; display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 8px; }
-    .ticket-box input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+    .ticket-box {
+      height: 58px; border-radius: 10px; border: 1px solid #D9DDE5; background: #F7F7FA;
+      display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 8px;
+      position: relative; overflow: hidden;
+    }
+    .ticket-box .xskt-ticket-input {
+      position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+      opacity: 0; z-index: 2; border: none; margin: 0; padding: 0;
+      font-size: 16px; cursor: text; -webkit-appearance: none; appearance: none;
+    }
+    .ticket-box .xskt-ticket-face { pointer-events: none; display: flex; gap: 8px; align-items: center; z-index: 1; }
     .ticket-ch { font-size: 20px; font-weight: 600; color: #9DA4AF; min-width: 16px; text-align: center; }
     .bottom-nav {
       position: fixed; left: 0; right: 0; bottom: 0; height: 106px; background: #fff; border-top: 1px solid #E5E7EB;
       display: flex; align-items: flex-start; justify-content: center; padding-top: 10px; z-index: 50;
     }
-    .bottom-inner { width: 100%; max-width: 760px; display: flex; position: relative; }
-    .nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; padding-top: 14px; cursor: pointer; }
+    .bottom-inner { width: 100%; max-width: 760px; display: flex; position: relative; padding-bottom: env(safe-area-inset-bottom, 0px); }
+    .nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; padding-top: 14px; cursor: pointer; position: relative; }
     .nav-item .ico { font-size: 28px; margin-bottom: 4px; }
     .nav-item .lbl { font-size: 11px; text-align: center; font-weight: 600; color: #8A8F98; line-height: 14px; }
     .nav-item.on .lbl { color: #EB2F98 !important; font-weight: 700; }
-    .nav-item.on .bar { width: 40px; height: 3px; border-radius: 2px; background: #EB2F98; position: absolute; top: 10px; }
+    .nav-item.on .bar { width: 40px; height: 3px; border-radius: 2px; background: #EB2F98; position: absolute; top: 8px; left: 50%; margin-left: -20px; }
     .nav-scan { width: 168px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding-bottom: 10px; cursor: pointer; }
     .nav-scan .fab { font-size: 40px; margin-top: -28px; }
     .nav-scan .pill { margin-top: 4px; background: #EB2F98; border-radius: 999px; padding: 4px 12px; color: #fff; font-size: 10px; font-weight: 700; }
@@ -139,6 +148,7 @@
       </div>
     </div>
   </div>
-  <script src="/web-app.js"></script>
+  <noscript><p style="padding:16px">Bật JavaScript để dò số.</p></noscript>
+  <script src="/web-app.js" defer></script>
 </body>
 </html>

@@ -1,6 +1,28 @@
 'use strict';
 
 (function () {
+  function forEachNode(nodes, fn) {
+    for (var i = 0; i < nodes.length; i++) fn(nodes[i]);
+  }
+
+  function findClickTarget(fromEl, stopEl) {
+    var el = fromEl;
+    while (el && el !== stopEl) {
+      if (el.nodeType === 1) {
+        if (el.id === 'btn-check') return el;
+        if (el.getAttribute('data-product')) return el;
+        if (el.getAttribute('data-kenotab')) return el;
+        if (el.getAttribute('data-ktext')) return el;
+        if (el.getAttribute('data-pick')) return el;
+        if (el.getAttribute('data-spec')) return el;
+        if (el.getAttribute('data-xregion')) return el;
+        if (el.getAttribute('data-xdai')) return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
   function apiBase() {
     var q = new URLSearchParams(location.search).get('api');
     if (q) return q.replace(/\/$/, '');
@@ -145,11 +167,14 @@
     return { matched: matched, prize: prize, amount: 0 };
   }
 
-  function normalize(s) {
-    return String(s || '')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '');
+  function stripViAccents(s) {
+    var t = String(s || '').toLowerCase();
+    try {
+      if (typeof t.normalize === 'function') {
+        t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      }
+    } catch (e) {}
+    return t;
   }
 
   function checkXSKTTicket(ticketNumber, result) {
@@ -157,7 +182,7 @@
     if (!ticket) return { matched: false, prize: '', amount: 0 };
 
     function getPrizeMeta(label) {
-      var l = normalize(label);
+      var l = stripViAccents(label);
       if (l.indexOf('dac biet') !== -1) return { digits: 6, rank: 0 };
       if (l.indexOf('nhat') !== -1 || l.indexOf('giai 1') !== -1) return { digits: 5, rank: 1 };
       if (l.indexOf('nhi') !== -1 || l.indexOf('giai 2') !== -1) return { digits: 5, rank: 2 };
@@ -805,9 +830,20 @@
           );
         })
         .join('') +
-      '</div><label class="ticket-box" style="position:relative;cursor:text">Số vé (6 chữ số)<input id="xskt-in" type="tel" inputmode="numeric" maxlength="6" value="' +
-      escapeHtml(state.xsktTicket) +
-      '" /></label><p class="sel-hint' +
+      '</div><p style="font-size:12px;color:#6F7682;margin:8px 0 4px">Chạm ô dưới để nhập 6 số vé</p><div class="ticket-box"><input id="xskt-in" class="xskt-ticket-input" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" value="' +
+      escapeHtml(state.xsktTicket.replace(/\D/g, '')) +
+      '" /><div class="xskt-ticket-face">' +
+      (function () {
+        var d = state.xsktTicket.replace(/\D/g, '');
+        var parts = [];
+        for (var i = 0; i < 6; i++) {
+          parts.push(
+            '<span class="ticket-ch">' + (d[i] ? escapeHtml(d[i]) : '—') + '</span>'
+          );
+        }
+        return parts.join('');
+      })() +
+      '</div></div><p class="sel-hint' +
       (state.xsktTicket.replace(/\D/g, '').length === 6 ? ' ok' : '') +
       '" style="margin-top:6px">' +
       (state.xsktTicket.replace(/\D/g, '').length === 6 ? 'Đã nhập đủ 6 số.' : 'Nhập đủ 6 số để dò.') +
@@ -930,7 +966,7 @@
 
   function render() {
     var tab = state.tab;
-    document.querySelectorAll('.tab-pill').forEach(function (el) {
+    forEachNode(document.querySelectorAll('.tab-pill'), function (el) {
       el.classList.toggle('on', el.getAttribute('data-tab') === tab);
     });
     document.getElementById('panel-do').classList.toggle('hidden', tab !== 'do');
@@ -948,7 +984,7 @@
   }
 
   function wire() {
-    document.querySelectorAll('.tab-pill').forEach(function (el) {
+    forEachNode(document.querySelectorAll('.tab-pill'), function (el) {
       el.addEventListener('click', function () {
         state.tab = el.getAttribute('data-tab');
         render();
@@ -968,10 +1004,9 @@
     document.getElementById('nav-scan').addEventListener('click', function () {
       toast('Quét vé: dùng app gốc (Expo) có camera OCR, hoặc nhập tay số vé tại đây.');
     });
-    document.getElementById('panel-do').addEventListener('click', function (e) {
-      var t = e.target.closest(
-        '[data-product],[data-kenotab],[data-ktext],[data-pick],[data-spec],[data-xregion],[data-xdai],#btn-check'
-      );
+    var panelDo = document.getElementById('panel-do');
+    panelDo.addEventListener('click', function (e) {
+      var t = findClickTarget(e.target, panelDo);
       if (!t) return;
       if (t.getAttribute('data-product')) {
         state.product = t.getAttribute('data-product');
@@ -1044,7 +1079,7 @@
       }
       if (t.id === 'btn-check') void doCheck();
     });
-    document.getElementById('panel-do').addEventListener('change', function (e) {
+    panelDo.addEventListener('change', function (e) {
       var t = e.target;
       if (t.id === 'ky-select') {
         state.ky = t.value;
@@ -1060,7 +1095,7 @@
         render();
       }
     });
-    document.getElementById('panel-do').addEventListener('input', function (e) {
+    panelDo.addEventListener('input', function (e) {
       var t = e.target;
       var slot = t.getAttribute('data-slot');
       if (slot) {
@@ -1240,9 +1275,26 @@
       });
   }
 
-  document.addEventListener('DOMContentLoaded', function () {
-    wire();
-    loadKyList();
-    render();
-  });
+  function boot() {
+    try {
+      wire();
+      loadKyList();
+      render();
+    } catch (err) {
+      console.error('[doxoso web]', err);
+      var p = document.getElementById('panel-do');
+      if (p) {
+        p.innerHTML =
+          '<p style="padding:16px;color:#D64545;font-weight:600">Không tải được giao diện dò số. Thử mở bằng Chrome/Safari hoặc tải lại trang (Ctrl+F5).</p><p style="padding:0 16px 16px;color:#6F7682;font-size:13px">Lỗi kỹ thuật: ' +
+          escapeHtml(String(err && err.message ? err.message : err)) +
+          '</p>';
+      }
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
 })();
