@@ -20,7 +20,13 @@
       -webkit-tap-highlight-color: transparent;
     }
     .wrap { max-width: 760px; margin: 0 auto; padding: 52px 16px 24px; }
-    h1 { font-size: 18px; font-weight: 800; letter-spacing: -0.5px; margin: 0 0 16px; }
+    .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+    .title-row h1 { font-size: 18px; font-weight: 800; letter-spacing: -0.5px; margin: 0; flex: 1; }
+    .btn-reset {
+      flex-shrink: 0; border: none; background: transparent; color: #2D7FF9;
+      font-size: 12px; font-weight: 700; cursor: pointer; padding: 6px 8px; font-family: inherit;
+    }
+    .btn-reset.hidden { display: none !important; }
     .tabs-row { display: flex; gap: 4px; margin-bottom: 16px; }
     .tab-pill {
       flex: 1; height: 36px; border-radius: 10px; border: 1px solid transparent;
@@ -36,15 +42,18 @@
       font-size: 12px; font-weight: 600; color: #6E7481; cursor: pointer;
     }
     .product-chip.on { border-color: #EB2F98; background: #FDEAF4; color: #EB2F98; font-weight: 700; }
-    .product-chip-logo { width: 28px; height: 20px; object-fit: contain; flex-shrink: 0; }
+    .product-chip-logo {
+      width: 28px; height: 20px; object-fit: contain; flex-shrink: 0;
+      mix-blend-mode: multiply; vertical-align: middle;
+    }
     .hint { font-size: 11px; color: #B0B5BE; margin-top: 6px; }
     .card { background: #fff; border-radius: 12px; border: 1px solid #E5E7EB; padding: 12px; margin-bottom: 12px; }
     .banner { display: flex; gap: 10px; align-items: center; padding: 12px; border-radius: 12px; border: 1px solid; margin-bottom: 12px; }
     .banner-logo {
-      width: 56px; height: 38px; border-radius: 10px; background: #FFFFFFDD;
+      width: 56px; height: 38px; border-radius: 10px; background: transparent;
       display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0;
     }
-    .banner-logo img { width: 50px; height: 30px; object-fit: contain; }
+    .banner-logo img { width: 50px; height: 30px; object-fit: contain; mix-blend-mode: multiply; }
     .banner h2 { margin: 0; font-size: 18px; font-weight: 800; }
     .banner p { margin: 2px 0 0; font-size: 12px; color: #666C76; }
     .tag { display: inline-block; margin-top: 4px; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 8px; }
@@ -135,6 +144,21 @@
     .date-grp { color: #6F7682; font-weight: 700; margin: 12px 0 8px; font-size: 14px; }
     .spinner { width: 20px; height: 20px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: sp 0.7s linear infinite; }
     @keyframes sp { to { transform: rotate(360deg); } }
+    .win-fx {
+      position: fixed; left: 0; right: 0; top: 0; bottom: 106px;
+      pointer-events: none; z-index: 60; overflow: hidden;
+    }
+    .win-fx.hidden { display: none !important; }
+    .win-fx-particle {
+      position: absolute; width: 8px; height: 8px; border-radius: 50%;
+      left: 50%; top: 26%; margin-left: -4px; opacity: 0;
+      animation: winfx-burst 1.45s ease-out forwards;
+    }
+    @keyframes winfx-burst {
+      0% { opacity: 1; transform: translate(0, 0) scale(0.25); }
+      12% { opacity: 1; }
+      100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(1.05); }
+    }
     .hidden { display: none !important; }
     .sel-hint { font-size: 12px; font-weight: 600; margin-top: 4px; color: #A16B00; }
     .sel-hint.ok { color: #24A972; }
@@ -157,8 +181,12 @@
 </head>
 <body>
   <div class="toast" id="toast"></div>
+  <div id="win-fx" class="win-fx hidden" aria-hidden="true"></div>
   <div class="wrap" id="main-scroll">
-    <h1>Dò Số</h1>
+    <div class="title-row">
+      <h1>Dò Số</h1>
+      <button type="button" class="btn-reset hidden" id="btn-reset">Đặt lại</button>
+    </div>
     <div class="tabs-row">
       <button type="button" class="tab-pill on" data-tab="do">Dò số</button>
       <button type="button" class="tab-pill" data-tab="luu">Lịch sử dò</button>

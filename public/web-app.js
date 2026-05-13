@@ -101,6 +101,178 @@
     checkResult: null,
   };
 
+  var winFxSessionKey = '';
+  var scrollResultDoneKey = '';
+  var lastCheckBtnScrollKey = '';
+
+  function latestKyOptionLabel() {
+    var row = state.kyList && state.kyList[0];
+    if (!row) return 'Mới nhất';
+    return 'Mới nhất · #' + row.kyso + ' · ' + formatKyRowDateVi(row.date || '');
+  }
+
+  function vietlottSelectionComplete() {
+    if (state.channel !== 'vietlott' || state.tab !== 'do') return false;
+    if (state.product === 'mega' || state.product === 'power') return state.picker.length === 6;
+    if (state.product === 'lotto535') return state.picker.length === 5 && state.lottoSpec.length === 1;
+    if (state.product === 'keno' && state.kenoTab === 'so') return state.picker.length === 10;
+    if (state.product === 'keno' && state.kenoTab === 'text') return state.kenoText != null;
+    if (state.product === 'max3d') return state.slots.filter(Boolean).length === 3;
+    if (state.product === 'max3dpro') return state.pro[0].every(Boolean) && state.pro[1].every(Boolean);
+    return false;
+  }
+
+  function xsktTicketComplete() {
+    return state.channel === 'xskt' && state.tab === 'do' && state.xsktTicket.replace(/\D/g, '').length === 6;
+  }
+
+  function scrollIntoViewSmooth(el, block) {
+    if (!el) return;
+    try {
+      el.scrollIntoView({ behavior: 'smooth', block: block || 'nearest' });
+    } catch (e) {
+      el.scrollIntoView(!!block);
+    }
+  }
+
+  function runWinFireworks() {
+    var host = document.getElementById('win-fx');
+    if (!host) return;
+    host.innerHTML = '';
+    host.classList.remove('hidden');
+    var colors = ['#FF6B9D', '#FFD93D', '#6BCB77', '#4D96FF', '#FF8F56', '#C77DFF', '#FFFFFF', '#FF4D4D'];
+    var n = 52;
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < n; i++) {
+      var ang = (Math.PI * 2 * i) / n + Math.random() * 0.35;
+      var dist = 70 + Math.random() * 132;
+      var dx = Math.cos(ang) * dist;
+      var dy = Math.sin(ang) * dist + 22 + Math.random() * 38;
+      var sp = document.createElement('span');
+      sp.className = 'win-fx-particle';
+      sp.style.background = colors[i % colors.length];
+      sp.style.setProperty('--dx', dx.toFixed(1) + 'px');
+      sp.style.setProperty('--dy', dy.toFixed(1) + 'px');
+      sp.style.animationDelay = i * 14 + 'ms';
+      frag.appendChild(sp);
+    }
+    host.appendChild(frag);
+    clearTimeout(runWinFireworks._t);
+    runWinFireworks._t = setTimeout(function () {
+      host.classList.add('hidden');
+      host.innerHTML = '';
+    }, 2800);
+  }
+
+  function maybeWinFireworks() {
+    if (state.tab !== 'do' || !state.checkResult || !state.checkResult.prize || !state.apiResult) return;
+    var key =
+      (state.channel || '') +
+      '|' +
+      (state.product || '') +
+      '|' +
+      (state.apiResult.kySo || state.ky || '') +
+      '|' +
+      String(state.checkResult.prize);
+    if (winFxSessionKey === key) return;
+    winFxSessionKey = key;
+    runWinFireworks();
+  }
+
+  function resetWebForm() {
+    state.picker = [];
+    state.lottoSpec = [];
+    state.slots = ['', '', ''];
+    state.pro = [
+      ['', '', ''],
+      ['', '', ''],
+    ];
+    state.ky = '';
+    state.kenoTab = 'so';
+    state.kenoText = null;
+    state.apiResult = null;
+    state.checkResult = null;
+    state.xsktTicket = '';
+    winFxSessionKey = '';
+    scrollResultDoneKey = '';
+    lastCheckBtnScrollKey = '';
+    var h = document.getElementById('win-fx');
+    if (h) {
+      h.classList.add('hidden');
+      h.innerHTML = '';
+    }
+    loadKyList();
+    render();
+  }
+
+  function tryScrollToCheckBtn() {
+    if (state.tab !== 'do' || state.loading) return;
+    var ok = false;
+    var key = '';
+    if (state.channel === 'vietlott') {
+      ok = vietlottSelectionComplete();
+      key =
+        'vl|' +
+        state.product +
+        '|' +
+        state.picker.join(',') +
+        '|' +
+        state.slots.join('') +
+        '|' +
+        state.pro[0].join('') +
+        '|' +
+        state.pro[1].join('') +
+        '|' +
+        state.lottoSpec.join(',') +
+        '|' +
+        state.kenoTab +
+        '|' +
+        String(state.kenoText || '');
+    } else if (state.channel === 'xskt') {
+      ok = xsktTicketComplete();
+      key = 'xs|' + state.xsktTicket;
+    }
+    if (!ok) {
+      lastCheckBtnScrollKey = '';
+      return;
+    }
+    if (key === lastCheckBtnScrollKey) return;
+    lastCheckBtnScrollKey = key;
+    requestAnimationFrame(function () {
+      var btn = document.getElementById('btn-check');
+      scrollIntoViewSmooth(btn, 'nearest');
+    });
+  }
+
+  function afterResultScrollAndWinFx() {
+    var br = document.getElementById('btn-reset');
+    if (br) br.classList.toggle('hidden', state.tab !== 'do');
+    if (state.tab !== 'do') return;
+    tryScrollToCheckBtn();
+    if (!state.loading && state.apiResult && state.checkResult) {
+      var rk =
+        (state.channel || '') +
+        '|' +
+        (state.product || '') +
+        '|' +
+        (state.apiResult.kySo || '') +
+        '|' +
+        String(state.checkResult.prize || '');
+      if (scrollResultDoneKey !== rk) {
+        scrollResultDoneKey = rk;
+        var delay = state.checkResult.prize ? 480 : 0;
+        setTimeout(function () {
+          var res = document.querySelector('#panel-do .result');
+          if (res) scrollIntoViewSmooth(res, 'start');
+        }, delay);
+      }
+      maybeWinFireworks();
+    } else {
+      scrollResultDoneKey = '';
+      if (!state.checkResult || !state.checkResult.prize) winFxSessionKey = '';
+    }
+  }
+
   function toast(msg) {
     var el = document.getElementById('toast');
     el.textContent = msg;
@@ -770,8 +942,8 @@
     var kyBlock = '';
     if (['keno', 'mega', 'power', 'max3d', 'max3dpro', 'lotto535'].indexOf(state.product) !== -1) {
       kyBlock =
-        '<label class="ky-row">📋 <select id="ky-select"><option value="">Mới nhất' +
-        (state.kyList[0] ? ' (#' + state.kyList[0].kyso + ')' : '') +
+        '<label class="ky-row">📋 <select id="ky-select"><option value="">' +
+        escapeHtml(latestKyOptionLabel()) +
         '</option>' +
         state.kyList
           .map(function (x) {
@@ -1060,6 +1232,8 @@
 
     if (tab === 'luu') {
       document.getElementById('panel-luu').innerHTML = renderSaved();
+      var brLuu = document.getElementById('btn-reset');
+      if (brLuu) brLuu.classList.add('hidden');
       return;
     }
     var panelDoEl = document.getElementById('panel-do');
@@ -1087,9 +1261,18 @@
         }
       });
     }
+    requestAnimationFrame(function () {
+      afterResultScrollAndWinFx();
+    });
   }
 
   function wire() {
+    var btnReset = document.getElementById('btn-reset');
+    if (btnReset) {
+      btnReset.addEventListener('click', function () {
+        resetWebForm();
+      });
+    }
     forEachNode(document.querySelectorAll('.tab-pill'), function (el) {
       el.addEventListener('click', function () {
         state.tab = el.getAttribute('data-tab');
