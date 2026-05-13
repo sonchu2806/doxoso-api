@@ -514,11 +514,7 @@
       spec.join('') +
       '</div>' +
       main +
-      '<div class="sel-hint' +
-      (mr && sr ? ' ok' : '') +
-      '">' +
-      (mr && sr ? 'Đã chọn đủ số, bạn có thể Dò kết quả.' : 'Vui lòng chọn 5 số và 1 số đặc biệt để dò kết quả.') +
-      '</div>'
+      (mr && sr ? '<div class="sel-hint ok">Đã chọn đủ số, bạn có thể Dò kết quả.</div>' : '')
     );
   }
 
@@ -1041,7 +1037,31 @@
       document.getElementById('panel-luu').innerHTML = renderSaved();
       return;
     }
-    document.getElementById('panel-do').innerHTML = state.channel === 'vietlott' ? renderVietlott() : renderXskt();
+    var panelDoEl = document.getElementById('panel-do');
+    var savedProductScroll = 0;
+    if (tab === 'do' && state.channel === 'vietlott') {
+      var scEl = panelDoEl.querySelector('.product-scroll');
+      if (scEl) savedProductScroll = scEl.scrollLeft;
+    }
+    panelDoEl.innerHTML = state.channel === 'vietlott' ? renderVietlott() : renderXskt();
+    if (tab === 'do' && state.channel === 'vietlott') {
+      requestAnimationFrame(function () {
+        var sc2 = panelDoEl.querySelector('.product-scroll');
+        if (!sc2) return;
+        if (savedProductScroll > 0) {
+          sc2.scrollLeft = savedProductScroll;
+        } else {
+          var onChip = sc2.querySelector('.product-chip.on');
+          if (onChip && typeof onChip.scrollIntoView === 'function') {
+            try {
+              onChip.scrollIntoView({ inline: 'center', block: 'nearest' });
+            } catch (e) {
+              onChip.scrollIntoView(true);
+            }
+          }
+        }
+      });
+    }
   }
 
   function wire() {
