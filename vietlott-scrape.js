@@ -482,10 +482,18 @@ async function getCurrentKyFromVietlottListing(product) {
 }
 
 // Lấy kỳ hiện tại + ngày (vietlott listing; ketquadientoan đã tắt)
-async function getCurrentInfo(product) {
+/** @param {{ skipCache?: boolean }} [opts] — skipCache: luôn gọi listing (dùng khi sync forceNetwork). */
+async function getCurrentInfo(product, opts) {
+  opts = opts || {};
   const cacheKey = 'current_' + product;
   const cached = cache[cacheKey];
-  if (cached && Date.now() - cached.timestamp < 60 * 60 * 1000) return cached.data;
+  if (
+    !opts.skipCache &&
+    cached &&
+    Date.now() - cached.timestamp < 60 * 60 * 1000
+  ) {
+    return cached.data;
+  }
 
   try {
     let currentKy = '';
@@ -1329,7 +1337,7 @@ async function scrapeVietlott(product, kyso, opts) {
 
   let info = null;
   if (!kyso) {
-    info = await getCurrentInfo(product);
+    info = await getCurrentInfo(product, { skipCache: forceNetwork });
     const curId =
       info?.currentKy != null && String(info.currentKy).trim() !== ''
         ? padVietlottId(product, info.currentKy)
