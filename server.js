@@ -409,6 +409,63 @@ app.get('/admin/sync-today', async (req, res) => {
   });
 });
 
+/**
+ * Warm Vietlott: từ kỳ hiện tại lùi dần, chỉ scrape kỳ nào trong Supabase còn thiếu số → upsert.
+ * Keno quay dày: dùng VIETLOTT_KENO_WARM_BACK (mặc định 48) hoặc ?kenoMaxBack=96.
+ * ?wait=1 — chờ xong (có thể vài–chục phút nếu kenoMaxBack lớn).
+ */
+app.get('/admin/warm-vietlott', async (req, res) => {
+  if (!supabase) {
+    return res.status(400).json({
+      success: false,
+      error: 'Chưa cấu hình SUPABASE_URL / SUPABASE_ANON_KEY.',
+    });
+  }
+  const wait = req.query.wait === '1' || req.query.sync === '1';
+  const depthRaw = parseInt(String(req.query.depth || ''), 10);
+  const kenoRaw = parseInt(String(req.query.kenoMaxBack || ''), 10);
+  const warmOpts = {};
+  if (Number.isFinite(depthRaw) && depthRaw > 0) {
+    warmOpts.depth = Math.min(40, depthRaw);
+  }
+  if (Number.isFinite(kenoRaw) && kenoRaw > 0) {
+    warmOpts.kenoMaxBack = Math.min(200, kenoRaw);
+  }
+
+  const run = function () {
+    return warmVietlottRecentToSupabase(warmOpts);
+  };
+
+  if (wait) {
+    return run()
+      .then(function () {
+        return res.json({
+          success: true,
+          mode: 'wait',
+          opts: warmOpts,
+          message: 'Warm Vietlott đã chạy xong (Keno + các game khác).',
+        });
+      })
+      .catch(function (e) {
+        return res.status(500).json({ success: false, error: e.message });
+      });
+  }
+
+  setImmediate(function () {
+    run().catch(function (e) {
+      console.error('[admin/warm-vietlott]', e);
+    });
+  });
+
+  return res.json({
+    success: true,
+    mode: 'background',
+    opts: warmOpts,
+    message:
+      'Đã khởi chạy warm Vietlott (điền kỳ thiếu vào Supabase). Keno: mặc định lùi ~48 kỳ; thêm ?kenoMaxBack=120 nếu DB lệch nhiều. Hoặc backfill: /admin/backfill-vietlott?products=keno&days=1',
+  });
+});
+
 app.get('/admin/scrape-all', async (req, res) => {
   const results = {};
   for (const product of VIETLOTT_PRODUCT_IDS) {

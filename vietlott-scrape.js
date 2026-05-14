@@ -1934,13 +1934,39 @@ async function scrapeAllXSKT(dateStr, region = 'mn') {
 /**
  * Gọi scrape theo từng kỳ gần đây để upsert vào Supabase (bỏ qua kỳ đã có đủ dữ liệu).
  * VIETLOTT_WARM_DEPTH (mặc định 10), VIETLOTT_WARM_DELAY_MS (mặc định 500).
+ * Keno: VIETLOTT_KENO_WARM_BACK (mặc định 48) — số kỳ lùi từ kỳ hiện tại (Keno quay dày, 12 kỳ là quá ít).
+ * @param {{ depth?: number; kenoMaxBack?: number }} [opts]
  */
-async function warmVietlottRecentToSupabase() {
+async function warmVietlottRecentToSupabase(opts) {
+  opts = opts || {};
   if (!supabase) {
     console.log('[warm vietlott] Bỏ qua — chưa cấu hình SUPABASE_URL hoặc khóa Supabase');
     return;
   }
-  const depth = Math.max(1, Math.min(40, parseInt(process.env.VIETLOTT_WARM_DEPTH || '10', 10)));
+  const depth = Math.max(
+    1,
+    Math.min(
+      40,
+      parseInt(
+        opts.depth != null && Number.isFinite(Number(opts.depth))
+          ? String(opts.depth)
+          : process.env.VIETLOTT_WARM_DEPTH || '10',
+        10
+      )
+    )
+  );
+  const kenoWarmBack = Math.max(
+    12,
+    Math.min(
+      200,
+      parseInt(
+        opts.kenoMaxBack != null && Number.isFinite(Number(opts.kenoMaxBack))
+          ? String(opts.kenoMaxBack)
+          : process.env.VIETLOTT_KENO_WARM_BACK || '48',
+        10
+      )
+    )
+  );
   const lotto535WarmMin = Math.max(
     15,
     Math.min(60, parseInt(process.env.VIETLOTT_LOTTO535_WARM_DAYS || '18', 10))
@@ -1955,7 +1981,7 @@ async function warmVietlottRecentToSupabase() {
 
       const maxBack =
         product === 'keno'
-          ? Math.min(depth, 12)
+          ? kenoWarmBack
           : product === 'lotto535'
             ? Math.min(Math.max(depth, lotto535WarmMin), 60)
             : depth;
@@ -1969,7 +1995,7 @@ async function warmVietlottRecentToSupabase() {
           ((Array.isArray(had.numbers) && had.numbers.length > 0) ||
             (Array.isArray(had.sets) && had.sets.length > 0));
         if (filled) continue;
-        await scrapeVietlott(product, kyStr).catch(() => {});
+        await scrapeVietlott(product, kyStr, { forceNetwork: true }).catch(() => {});
         await new Promise((r) => setTimeout(r, delayMs));
       }
     } catch (e) {
@@ -2077,7 +2103,7 @@ async function backfillVietlottMonthsToSupabase(months, options) {
           continue;
         }
         try {
-          const result = await scrapeVietlott(product, kyStr);
+          const result = await scrapeVietlott(product, kyStr, { forceNetwork: true });
           const ok =
             result &&
             ((Array.isArray(result.numbers) && result.numbers.length > 0) ||

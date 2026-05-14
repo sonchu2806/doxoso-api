@@ -39,6 +39,14 @@
   </section>
 
   <section>
+    <h2 style="margin:0 0 10px;font-size:1rem">Keno → Supabase (nhiều kỳ)</h2>
+    <p><strong>Sync hôm nay</strong> chỉ cập nhật khoảng “kỳ hiện tại” một lần. Để lấp các kỳ Keno thiếu trong DB, chạy <strong>Warm</strong> (lùi từ kỳ mới nhất, chỉ scrape kỳ chưa đủ số).</p>
+    <button type="button" id="btn-warm">Warm Vietlott (nền)</button>
+    <button type="button" id="btn-warm-keno" class="secondary">Warm Keno sâu (nền, kenoMaxBack=120)</button>
+    <p style="margin:8px 0 0;font-size:0.85rem">Backfill nặng hơn (ví dụ 1 ngày Keno): <a href="/admin/backfill-vietlott?products=keno&amp;days=1" target="_blank" rel="noopener">/admin/backfill-vietlott?products=keno&amp;days=1</a> (nền; thêm <code>&amp;sync=1</code> khi chạy local để chờ JSON).</p>
+  </section>
+
+  <section>
     <h2 style="margin:0 0 10px;font-size:1rem">Liên kết debug (mở tab mới)</h2>
     <p><a href="/debug-resolved-url?product=mega" target="_blank" rel="noopener">/debug-resolved-url?product=mega</a></p>
     <p><a href="/debug-vietlott-html?product=mega" target="_blank" rel="noopener">/debug-vietlott-html?product=mega</a></p>
@@ -63,6 +71,8 @@
     document.getElementById('btn-sb').onclick = function () { get('/admin/supabase-status'); };
     document.getElementById('btn-sync-today').onclick = function () { get('/admin/sync-today'); };
     document.getElementById('btn-sync-today-wait').onclick = function () { get('/admin/sync-today?wait=1'); };
+    document.getElementById('btn-warm').onclick = function () { get('/admin/warm-vietlott'); };
+    document.getElementById('btn-warm-keno').onclick = function () { get('/admin/warm-vietlott?kenoMaxBack=120'); };
   </script>
 </body>
 </html>
