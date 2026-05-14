@@ -42,7 +42,8 @@
   <p><label>Token (nếu bạn đặt <code>LOCAL_BRIDGE_TOKEN</code> trong .env)</label><input type="password" id="token" placeholder="Để trống nếu không dùng token" autocomplete="off" /></p>
 
   <h2 class="panel-title">Kỳ mới nhất trong Supabase (theo game)</h2>
-  <p class="panel-hint">Đọc từ bảng <code>vietlott_results</code> — sau mỗi lần đồng bộ thành công trang sẽ tự làm mới. So sánh với JSON bên dưới (cột <code>kySo</code> / <code>drawDate</code> vừa scrape).</p>
+  <p class="panel-hint">Đọc từ bảng <code>vietlott_results</code> qua <code>GET /api/status/latest</code> — sau mỗi lần đồng bộ thành công trang sẽ tự làm mới. Nếu vừa <code>git pull</code>, hãy <strong>dừng và chạy lại</strong> <code>npm run local-bridge</code> (bản bridge cũ không có API này sẽ trả HTML 404 → bảng lỗi). Có <code>LOCAL_BRIDGE_TOKEN</code> thì phải nhập token. So sánh với JSON ( <code>kySo</code> / <code>drawDate</code> vừa scrape).</p>
+  <p id="latest-banner" class="panel-hint" style="display:none;margin-bottom:8px;padding:8px 10px;background:#fef7e0;border-radius:6px;color:#7a4e00;border:1px solid #f0d090;"></p>
   <table class="latest" aria-label="Kỳ Vietlott mới nhất trong Supabase">
     <thead>
       <tr><th>Game</th><th>Kỳ (kyso)</th><th>Ngày quay</th></tr>
@@ -89,10 +90,19 @@
     var latestTbody = document.getElementById('latest-tbody');
     var xsktWrap = document.getElementById('xskt-latest-wrap');
     var xsktEl = document.getElementById('xskt-latest');
+    var latestBanner = document.getElementById('latest-banner');
+    var SS_VL_KEY = 'doxoso_bridge_vietlott_latest';
 
     function headers() {
       var t = document.getElementById('token').value.trim();
       var h = { 'Content-Type': 'application/json' };
+      if (t) h['x-bridge-token'] = t;
+      return h;
+    }
+
+    function headersGet() {
+      var t = document.getElementById('token').value.trim();
+      var h = {};
       if (t) h['x-bridge-token'] = t;
       return h;
     }
@@ -152,22 +162,105 @@
       xsktWrap.style.display = 'block';
     }
 
+    function persistVietlottFromSyncResponse(j) {
+      var vl = j && (j.vietlott || j.results);
+      if (!vl || typeof vl !== 'object') return;
+      var map = {};
+      for (var i = 0; i < VL_ORDER.length; i++) {
+        var k = VL_ORDER[i];
+        var cell = vl[k];
+        if (cell && cell.ok && cell.kySo) {
+          map[k] = { kySo: String(cell.kySo), drawDate: cell.drawDate ? String(cell.drawDate) : '—' };
+        }
+      }
+      try {
+        sessionStorage.setItem(SS_VL_KEY, JSON.stringify({ ts: Date.now(), source: 'lastSync', vietlott: map }));
+      } catch (e) {}
+    }
+
+    function readPersistedVietlottBlock() {
+      try {
+        var o = JSON.parse(sessionStorage.getItem(SS_VL_KEY) || 'null');
+        return o && o.vietlott && Object.keys(o.vietlott).length ? o : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function showLatestBanner(text) {
+      if (!latestBanner) return;
+      latestBanner.textContent = text;
+      latestBanner.style.display = 'block';
+    }
+
+    function hideLatestBanner() {
+      if (!latestBanner) return;
+      latestBanner.style.display = 'none';
+    }
+
     function loadLatestFromSupabase() {
+      hideLatestBanner();
       latestTbody.innerHTML = '<tr><td colspan="3" class="muted">Đang tải…</td></tr>';
-      fetch('/api/status/latest', { headers: headers() })
-        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+
+      function showTableOrFallback(errText) {
+        var cached = readPersistedVietlottBlock();
+        if (cached && cached.vietlott) {
+          showLatestBanner(
+            errText +
+              ' — tạm hiển thị kỳ từ lần đồng bộ Vietlott gần nhất trên trình duyệt này (chưa xác nhận được từ Supabase).'
+          );
+          renderLatestTable(cached.vietlott);
+          return;
+        }
+        latestTbody.innerHTML = '<tr><td colspan="3" class="muted">' + escapeHtml(errText) + '</td></tr>';
+      }
+
+      fetch('/api/status/latest', { method: 'GET', headers: headersGet() })
+        .then(function (r) {
+          return r.text().then(function (text) {
+            var j = null;
+            try {
+              j = text ? JSON.parse(text) : null;
+            } catch (parseErr) {
+              return {
+                parseFail: true,
+                status: r.status,
+              };
+            }
+            return { ok: r.ok, status: r.status, j: j };
+          });
+        })
         .then(function (x) {
-          if (!x.ok || !x.j.success) {
-            latestTbody.innerHTML =
-              '<tr><td colspan="3" class="muted">' +
-              escapeHtml((x.j && x.j.error) || 'Không đọc được Supabase (kiểm tra token / .env).') +
-              '</td></tr>';
+          if (x && x.parseFail) {
+            showTableOrFallback(
+              'HTTP ' +
+                x.status +
+                ': phản hồi không phải JSON. Thường do bridge chưa restart sau khi cập nhật code (thiếu GET /api/status/latest), hoặc sai URL/host.'
+            );
             return;
           }
+          if (!x.ok || !x.j || !x.j.success) {
+            showTableOrFallback(
+              (x.j && x.j.error) ||
+                'HTTP ' + (x.status != null ? x.status : '?') + ' — kiểm tra token (LOCAL_BRIDGE_TOKEN), .env Supabase trên máy chạy bridge.'
+            );
+            return;
+          }
+          try {
+            sessionStorage.setItem(
+              SS_VL_KEY,
+              JSON.stringify({ ts: Date.now(), source: 'supabase', vietlott: x.j.vietlott || {} })
+            );
+          } catch (e2) {}
+          hideLatestBanner();
           renderLatestTable(x.j.vietlott || {});
         })
-        .catch(function () {
-          latestTbody.innerHTML = '<tr><td colspan="3" class="muted">Lỗi mạng khi đọc Supabase</td></tr>';
+        .catch(function (e) {
+          var msg =
+            e && e.name === 'TypeError'
+              ? 'Không kết nối được tới bridge (đã chạy npm run local-bridge chưa? URL đúng cùng host:port với trang này?).'
+              : String((e && e.message) || e);
+          showTableOrFallback(msg);
         });
     }
 
@@ -181,6 +274,7 @@
           statusEl.textContent = x.ok ? 'Xong.' : 'Lỗi HTTP';
           out.textContent = JSON.stringify(x.j, null, 2);
           if (x.ok && x.j && x.j.success) {
+            persistVietlottFromSyncResponse(x.j);
             renderXsktFromSyncPayload(x.j);
             loadLatestFromSupabase();
           }
