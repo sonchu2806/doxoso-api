@@ -131,6 +131,63 @@ function buildVietlottListingUrl(product) {
   return 'https://vietlott.vn' + path;
 }
 
+const VIETLOTT_UA =
+  process.env.VIETLOTT_USER_AGENT ||
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+function vietlottAxiosHeaders() {
+  return {
+    'User-Agent': VIETLOTT_UA,
+    Accept:
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'max-age=0',
+    Connection: 'keep-alive',
+    Referer: 'https://vietlott.vn/vi/trung-thuong/ket-qua-trung-thuong',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+  };
+}
+
+/**
+ * GET HTML từ vietlott.vn — dùng chung cho listing, scrape axios.
+ * Nếu set VIETLOTT_PROXY_URL (HTTP proxy forward ?url=), gọi qua proxy (thường hết 403 trên Railway).
+ */
+async function vietlottGetHtml(absoluteUrl, opt) {
+  opt = opt || {};
+  const raw = String(absoluteUrl || '').trim();
+  if (!raw.includes('vietlott.vn')) {
+    const { data } = await axios.get(raw, {
+      headers: {
+        'User-Agent': VIETLOTT_UA,
+        Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'vi-VN,vi;q=0.9',
+      },
+      timeout: opt.timeout != null ? opt.timeout : 20000,
+    });
+    return typeof data === 'string' ? data : String(data ?? '');
+  }
+  const sep = raw.includes('?') ? '&' : '?';
+  const busted = raw + sep + 'nocatche=1&_vlcb=' + Date.now();
+  const fetchUrl =
+    VIETLOTT_PROXY && busted.includes('vietlott.vn')
+      ? VIETLOTT_PROXY + '?url=' + encodeURIComponent(busted)
+      : busted;
+  const { data } = await axios.get(fetchUrl, {
+    headers: vietlottAxiosHeaders(),
+    timeout: opt.timeout != null ? opt.timeout : 25000,
+    maxRedirects: 8,
+  });
+  return typeof data === 'string' ? data : String(data ?? '');
+}
+
 const PRIZE_LABELS = {
   G1: 'Đặc biệt', G2: 'Giải nhất', G3: 'Giải nhì',
   G4: 'Giải ba', G5: 'Giải tư', G6: 'Giải năm',
@@ -196,15 +253,7 @@ async function getCurrentKyFromVietlottListing(product) {
   const listUrl = buildVietlottListingUrl(product);
   if (!listUrl) return { currentKy: '', currentDate: '' };
   try {
-    const { data: html } = await axios.get(listUrl, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'vi-VN,vi;q=0.9',
-      },
-      timeout: 20000,
-    });
+    const html = await vietlottGetHtml(listUrl, { timeout: 22000 });
     const $ = cheerio.load(html);
 
     if (product === 'keno') {
@@ -254,7 +303,8 @@ async function getCurrentKyFromVietlottListing(product) {
       currentDate: dateMatch ? dateMatch[0] : '',
     };
   } catch (e) {
-    console.warn('[getCurrentKyFromVietlottListing]', product, e.message);
+    const st = e.response && e.response.status;
+    console.warn('[getCurrentKyFromVietlottListing]', product, st || '', e.message);
     return { currentKy: '', currentDate: '' };
   }
 }
@@ -370,10 +420,15 @@ async function getUrlFromKySo(product, kyso) {
 
 async function fetchHTML(url) {
   try {
-    const { data } = await axios.get(url, {
+    const u = String(url || '');
+    if (u.includes('vietlott.vn')) {
+      const html = await vietlottGetHtml(u, { timeout: 10000 });
+      return html;
+    }
+    const { data } = await axios.get(u, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html',
+        'User-Agent': VIETLOTT_UA,
+        Accept: 'text/html',
         'Accept-Language': 'vi-VN,vi;q=0.9',
       },
       timeout: 10000,
@@ -725,20 +780,7 @@ async function scrapeWithAxios(url, product, kysoTarget) {
     const u = String(url);
     if (!u.includes('vietlott.vn')) return null;
 
-    const fetchUrl =
-      VIETLOTT_PROXY && u.includes('vietlott.vn')
-        ? VIETLOTT_PROXY + '?url=' + encodeURIComponent(u)
-        : u;
-    const { data: html } = await axios.get(fetchUrl, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.8',
-      },
-      timeout: 20000,
-    });
-    const htmlStr = typeof html === 'string' ? html : String(html ?? '');
+    const htmlStr = await vietlottGetHtml(u, { timeout: 20000 });
     console.log('[scrapeWithAxios] fetched url:', u, 'htmlLen:', htmlStr.length, 'hasProPlus:', htmlStr.includes('divMax3DProPlus'));
 
     const $ = cheerio.load(html);
