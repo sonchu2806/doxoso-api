@@ -1430,11 +1430,27 @@ async function scrapeVietlott(product, kyso, opts) {
   for (const u of tryUrls) {
     if (!u) continue;
     const r = await scrapeWithAxios(u, product, kyso);
-    if (r) {
-      axiosResult = r;
-      url = u;
-      break;
+    if (!r || !vietlottResultHasPayload(r)) continue;
+    let parsedPad = padVietlottId(product, r.kySo || '');
+    if (!parsedPad && (product === 'max3d' || product === 'max3dpro') && kyso) {
+      parsedPad = padVietlottId(product, kyso);
     }
+    if (kyso) {
+      const wantPad = padVietlottId(product, kyso);
+      if (wantPad && parsedPad && wantPad !== parsedPad) {
+        console.warn(
+          '[' + product + '] axios: parsed ky',
+          parsedPad,
+          '≠ requested',
+          wantPad,
+          '(URL ' + String(u).slice(0, 96) + '…)'
+        );
+        continue;
+      }
+    }
+    axiosResult = r;
+    url = u;
+    break;
   }
 
   // Thử axios theo tryUrls (chỉ vietlott.vn; ketquadientoan đã tắt).
@@ -1792,6 +1808,22 @@ function vietlottResultHasPayload(data) {
 }
 
 /**
+ * Trang chi tiết có thể bỏ qua ?id= và vẫn render kỳ “mới nhất” — chỉ chấp nhận khi kỳ parse khớp kỳ đang hỏi.
+ * Max3D/Pro: nếu HTML không có # kỳ thì tạm dùng kyso truyền vào để so khớp.
+ */
+function vietlottParsedKyAcceptableForRequest(product, requestedKyStr, parsedRow) {
+  if (!requestedKyStr || !parsedRow || !vietlottResultHasPayload(parsedRow)) return false;
+  const want = padVietlottId(product, requestedKyStr);
+  if (!want) return false;
+  let gotRaw = parsedRow.kySo != null && String(parsedRow.kySo).trim() !== '' ? String(parsedRow.kySo) : '';
+  if (!gotRaw && (product === 'max3d' || product === 'max3dpro')) {
+    gotRaw = String(requestedKyStr).trim();
+  }
+  const got = padVietlottId(product, gotRaw);
+  return !!got && got === want;
+}
+
+/**
  * Chỉ dùng URL chi tiết theo id kỳ (không gọi getUrlFromKySo — tránh chặn kỳ > “kỳ hiện tại” trên listing).
  */
 async function scrapeVietlottDetailOnly(product, kyStr, detailOpts) {
@@ -1805,17 +1837,18 @@ async function scrapeVietlottDetailOnly(product, kyStr, detailOpts) {
   const detailUrl = buildVietlottDetailUrl(product, kyStr);
   if (!detailUrl) return null;
   const listUrl = buildVietlottListingUrl(product);
+  // Mega/Power/Lotto: listing luôn là kỳ mới nhất — dễ lệch với id đang forward; chỉ gọi trang chi tiết.
   const tryUrls = [detailUrl];
-  if ((product === 'max3d' || product === 'max3dpro') && listUrl) tryUrls.push(listUrl);
-  if (product === 'keno' && listUrl && !tryUrls.includes(listUrl)) tryUrls.push(listUrl);
-  else if (product !== 'max3d' && product !== 'max3dpro' && listUrl && !tryUrls.includes(listUrl)) {
+  if (product === 'max3d' || product === 'max3dpro') {
+    if (listUrl) tryUrls.push(listUrl);
+  } else if (product === 'keno' && listUrl && !tryUrls.includes(listUrl)) {
     tryUrls.push(listUrl);
   }
 
   for (const u of tryUrls) {
     if (!u) continue;
     const r = await scrapeWithAxios(u, product, kyStr);
-    if (r && vietlottResultHasPayload(r)) {
+    if (r && vietlottParsedKyAcceptableForRequest(product, kyStr, r)) {
       const rowKy = padVietlottId(product, r.kySo || kyStr || '');
       if (rowKy) r.kySo = rowKy;
       setCache(cacheKey, r);
