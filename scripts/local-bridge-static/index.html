@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Đồng bộ Vietlott / XSKT → Supabase (máy local)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 560px; margin: 24px auto; padding: 0 16px; line-height: 1.45; }
+    h1 { font-size: 1.15rem; }
+    p, li { color: #333; font-size: 0.95rem; }
+    button {
+      display: block; width: 100%; margin: 10px 0; padding: 14px 16px;
+      font-size: 1rem; font-weight: 600; border: none; border-radius: 10px; cursor: pointer;
+    }
+    .primary { background: #1a73e8; color: #fff; }
+    .secondary { background: #e8f0fe; color: #174ea6; }
+    pre { background: #f4f4f4; padding: 12px; border-radius: 8px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+    input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; margin-top: 6px; }
+    .note { background: #fff8e1; border: 1px solid #ffe082; padding: 12px; border-radius: 8px; margin: 16px 0; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>Đồng bộ từ máy bạn → Supabase</h1>
+  <p>Luồng scrape chạy trên <strong>máy đang chạy lệnh <code>node scripts/local-vietlott-bridge.js</code></strong> (IP nhà hoặc mạng của bạn), không qua Railway — thường qua được Cloudflare hơn.</p>
+
+  <div class="note">
+    <strong>Máy / điện thoại có phải bật không?</strong><br />
+    • <strong>Máy chạy Node (bridge)</strong>: phải <strong>bật</strong> và giữ lệnh chạy trong lúc bạn bấm đồng bộ.<br />
+    • <strong>Điện thoại</strong> (chỉ mở trang này qua WiFi để bấm nút): chỉ cần bật <strong>khi</strong> bạn đang thao tác; xong có thể tắt — dữ liệu đã lên Supabase.<br />
+    • Nếu chỉ chạy bridge trên PC và bấm trên chính PC: chỉ cần PC bật lúc sync.
+  </div>
+
+  <p><label>Token (nếu bạn đặt <code>LOCAL_BRIDGE_TOKEN</code> trong .env)</label><input type="password" id="token" placeholder="Để trống nếu không dùng token" autocomplete="off" /></p>
+
+  <button type="button" class="primary" id="btn-full">Đồng bộ đầy đủ (Vietlott + XSKT 3 miền)</button>
+  <button type="button" class="secondary" id="btn-vl">Chỉ Vietlott (mọi game)</button>
+  <button type="button" class="secondary" id="btn-xskt">Chỉ XSKT (mb, mt, mn)</button>
+
+  <p id="status" style="color:#666;font-size:14px"></p>
+  <pre id="out">Chưa chạy.</pre>
+
+  <h2 style="font-size:1rem;margin-top:24px">Cách dùng nhanh</h2>
+  <ol>
+    <li>Trong thư mục <code>doxoso-api</code>, file <code>.env</code> có <code>SUPABASE_URL</code> và khóa (ưu tiên <code>SUPABASE_SERVICE_ROLE_KEY</code>).</li>
+    <li>Chạy: <code>npm run local-bridge</code></li>
+    <li>Mở URL trên trình duyệt; điện thoại cùng WiFi dùng IP LAN máy tính thay cho 127.0.0.1.</li>
+    <li>Lần đầu có thể chậm (Puppeteer / nhiều request).</li>
+  </ol>
+
+  <script>
+    var out = document.getElementById('out');
+    var statusEl = document.getElementById('status');
+    function headers() {
+      var t = document.getElementById('token').value.trim();
+      var h = { 'Content-Type': 'application/json' };
+      if (t) h['x-bridge-token'] = t;
+      return h;
+    }
+    function post(path) {
+      statusEl.textContent = 'Đang chạy… (có thể vài phút)';
+      out.textContent = '…';
+      fetch(path, { method: 'POST', headers: headers(), body: '{}' })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (x) {
+          statusEl.textContent = x.ok ? 'Xong.' : 'Lỗi HTTP';
+          out.textContent = JSON.stringify(x.j, null, 2);
+        })
+        .catch(function (e) {
+          statusEl.textContent = 'Lỗi mạng';
+          out.textContent = String(e);
+        });
+    }
+    document.getElementById('btn-full').onclick = function () { post('/api/sync/full'); };
+    document.getElementById('btn-vl').onclick = function () { post('/api/sync/vietlott'); };
+    document.getElementById('btn-xskt').onclick = function () { post('/api/sync/xskt'); };
+  </script>
+</body>
+</html>
