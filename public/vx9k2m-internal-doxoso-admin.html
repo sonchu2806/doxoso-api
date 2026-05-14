@@ -12,7 +12,6 @@
     section { background: #1c1c1c; border: 1px solid #333; border-radius: 10px; padding: 14px; margin: 14px 0; }
     button { background: #2d7ff9; color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; margin: 6px 8px 6px 0; min-height: 44px; font-size: 0.95rem; touch-action: manipulation; }
     button.secondary { background: #333; }
-    button.warn { background: #8a5a00; }
     pre { background: #0d0d0d; padding: 12px; border-radius: 8px; overflow: auto; font-size: 11px; max-height: 320px; white-space: pre-wrap; word-break: break-all; }
     a { color: #7ab8ff; }
     code { background: #333; padding: 2px 6px; border-radius: 4px; }
@@ -23,7 +22,8 @@
   <p>Chỉ dùng vận hành. API gọi cùng origin (<code id="origin"></code>). Không có đăng nhập — giữ URL bí mật.</p>
 
   <section>
-    <h2 style="margin:0 0 10px;font-size:1rem">Kiểm tra nhanh</h2>
+    <h2 style="margin:0 0 10px;font-size:1rem">Kiểm tra trạng thái</h2>
+    <p style="margin-top:0">Gọi nhanh các endpoint kiểm tra server / Supabase / tới Vietlott (không chạy job đồng bộ).</p>
     <button type="button" id="btn-health">GET /health</button>
     <button type="button" id="btn-test" class="secondary">GET /test-connection</button>
     <button type="button" id="btn-sb">GET /admin/supabase-status</button>
@@ -32,35 +32,9 @@
   </section>
 
   <section>
-    <h2 style="margin:0 0 10px;font-size:1rem">Đồng bộ dữ liệu hàng ngày</h2>
-    <p>Chạy trên server Railway — máy tính/điện thoại của bạn không cần bật sau khi đã nhấn và thấy phản hồi JSON (chế độ nền). Dùng được trên điện thoại.</p>
-    <button type="button" id="btn-sync-today">Sync hôm nay (nền, khuyến nghị)</button>
-    <button type="button" id="btn-sync-today-wait" class="warn">Sync hôm nay (chờ xong)</button>
-    <p style="margin:8px 0 0;font-size:0.85rem">“Chờ xong” có thể 1–5+ phút; mạng di động/proxy đôi khi cắt kết nối trước khi xong.</p>
-  </section>
-
-  <section>
-    <h2 style="margin:0 0 10px;font-size:1rem">Keno → Supabase (nhiều kỳ)</h2>
-    <p><strong>Sync hôm nay</strong> chỉ cập nhật khoảng “kỳ hiện tại” một lần. Để lấp các kỳ Keno thiếu trong DB, chạy <strong>Warm</strong> (lùi từ kỳ mới nhất, chỉ scrape kỳ chưa đủ số).</p>
-    <button type="button" id="btn-warm">Warm Vietlott (nền)</button>
-    <button type="button" id="btn-warm-keno" class="secondary">Warm Keno sâu (nền, kenoMaxBack=120)</button>
-    <p style="margin:8px 0 0;font-size:0.85rem">Backfill nặng hơn (ví dụ 1 ngày Keno): <a href="/admin/backfill-vietlott?products=keno&amp;days=1" target="_blank" rel="noopener">/admin/backfill-vietlott?products=keno&amp;days=1</a> (nền; thêm <code>&amp;sync=1</code> khi chạy local để chờ JSON).</p>
-  </section>
-
-  <section>
-    <h2 style="margin:0 0 10px;font-size:1rem">Đồng bộ từ máy nhà (local bridge)</h2>
-    <p>Không thể thêm nút trên trang này để “chạy local”: trang admin chạy trên <strong>Railway</strong>, còn bridge phải chạy trên <strong>máy bạn</strong> (<code>127.0.0.1</code>). Nút ở đây chỉ gọi được API server, không mở được Node trên PC bạn.</p>
-    <p style="margin:8px 0 0"><strong>Việc cần làm:</strong> clone/pull repo <code>doxoso-api</code>, đặt <code>.env</code> (Supabase), trong thư mục gốc chạy:</p>
-    <pre style="margin-top:8px">npm install
-npm run local-bridge</pre>
-    <p>Trên cùng máy đó mở trình duyệt: <code>http://127.0.0.1:3847/</code> — điện thoại cùng WiFi dùng <code>http://&lt;IP-LAN-PC&gt;:3847/</code>. Tùy chọn <code>LOCAL_BRIDGE_TOKEN</code> trong <code>.env</code> rồi nhập token trên trang bridge.</p>
-  </section>
-
-  <section>
     <h2 style="margin:0 0 10px;font-size:1rem">Liên kết debug (mở tab mới)</h2>
     <p><a href="/debug-resolved-url?product=mega" target="_blank" rel="noopener">/debug-resolved-url?product=mega</a></p>
     <p><a href="/debug-vietlott-html?product=mega" target="_blank" rel="noopener">/debug-vietlott-html?product=mega</a></p>
-    <p><a href="/admin/backfill-vietlott?months=2" target="_blank" rel="noopener">/admin/backfill-vietlott?months=2</a> (cẩn thận: job nền)</p>
   </section>
 
   <script>
@@ -80,10 +54,6 @@ npm run local-bridge</pre>
     document.getElementById('btn-test').onclick = function () { get('/test-connection'); };
     document.getElementById('btn-sb').onclick = function () { get('/admin/supabase-status'); };
     document.getElementById('btn-vl-net').onclick = function () { get('/admin/vietlott-connectivity?product=mega'); };
-    document.getElementById('btn-sync-today').onclick = function () { get('/admin/sync-today'); };
-    document.getElementById('btn-sync-today-wait').onclick = function () { get('/admin/sync-today?wait=1'); };
-    document.getElementById('btn-warm').onclick = function () { get('/admin/warm-vietlott'); };
-    document.getElementById('btn-warm-keno').onclick = function () { get('/admin/warm-vietlott?kenoMaxBack=120'); };
   </script>
 </body>
 </html>
