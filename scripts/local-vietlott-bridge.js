@@ -33,6 +33,7 @@ const {
   scrapeAllXSKT,
   saveXSKTToSupabase,
   normalizeDrawDateForSupabase,
+  getLatestVietlottFromSupabase,
 } = vs;
 
 const PORT = Math.max(1024, Math.min(65535, parseInt(process.env.LOCAL_BRIDGE_PORT || '3847', 10)));
@@ -49,12 +50,28 @@ function bridgeAuth(req, res, next) {
   next();
 }
 
+function pickKyDrawFromScrape(data) {
+  if (!data || typeof data !== 'object') return { kySo: '', drawDate: '' };
+  const kySo = data.kySo != null && data.kySo !== '' ? String(data.kySo).trim() : '';
+  const drawDate = data.drawDate != null && data.drawDate !== '' ? String(data.drawDate).trim() : '';
+  const hasPayload =
+    (Array.isArray(data.numbers) && data.numbers.length > 0) ||
+    (Array.isArray(data.sets) && data.sets.length > 0);
+  return { kySo, drawDate, hasPayload: !!hasPayload };
+}
+
 async function syncVietlottAll() {
   const results = {};
   for (const product of VIETLOTT_PRODUCT_IDS) {
     try {
-      await scrapeVietlott(product, null, { forceNetwork: true });
-      results[product] = { ok: true };
+      const data = await scrapeVietlott(product, null, { forceNetwork: true });
+      const picked = pickKyDrawFromScrape(data);
+      results[product] = {
+        ok: true,
+        kySo: picked.kySo,
+        drawDate: picked.drawDate,
+        hasPayload: picked.hasPayload,
+      };
     } catch (e) {
       results[product] = { ok: false, error: e.message };
     }
@@ -68,12 +85,18 @@ async function syncXsktThreeRegions() {
     try {
       const all = await scrapeAllXSKT(null, region);
       let n = 0;
+      const drawDates = new Set();
       for (const [dai, row] of Object.entries(all)) {
         const drawDateNorm = normalizeDrawDateForSupabase(row.drawDate);
         await saveXSKTToSupabase(dai, drawDateNorm, row);
+        if (row && row.drawDate) drawDates.add(String(row.drawDate).trim());
         n++;
       }
-      out.regions[region] = { ok: true, daiCount: n };
+      out.regions[region] = {
+        ok: true,
+        daiCount: n,
+        drawDates: Array.from(drawDates).sort(),
+      };
     } catch (e) {
       out.regions[region] = { ok: false, error: e.message };
     }
@@ -95,6 +118,22 @@ app.get('/api/health', (_req, res) => {
     authRequired: !!BRIDGE_TOKEN,
     hint: 'Scrape chạy trên máy này (IP của bạn), rồi ghi Supabase.',
   });
+});
+
+/** Kỳ / ngày mới nhất đang lưu trong Supabase (để đối chiếu sau sync). */
+app.get('/api/status/latest', bridgeAuth, async (_req, res) => {
+  try {
+    const vietlott = {};
+    for (const product of VIETLOTT_PRODUCT_IDS) {
+      const row = await getLatestVietlottFromSupabase(product);
+      vietlott[product] = row
+        ? { kySo: String(row.kySo || '').trim(), drawDate: String(row.drawDate || '').trim() }
+        : null;
+    }
+    res.json({ success: true, source: 'supabase', vietlott });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 app.post('/api/sync/vietlott', bridgeAuth, async (_req, res) => {
