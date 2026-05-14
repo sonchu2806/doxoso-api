@@ -963,7 +963,7 @@ async function scrapeWithAxios(url, product, kysoTarget) {
     const htmlStr = await vietlottGetHtml(u, { timeout: 20000 });
     console.log('[scrapeWithAxios] fetched url:', u, 'htmlLen:', htmlStr.length, 'hasProPlus:', htmlStr.includes('divMax3DProPlus'));
 
-    const $ = cheerio.load(html);
+    const $ = cheerio.load(htmlStr);
     const offic = parseVietlottOfficialHtml($, product, kysoTarget);
     if (offic) return offic;
     if (['mega', 'power', 'max3d', 'max3dpro', 'lotto535', 'keno'].includes(product)) {
