@@ -48,6 +48,15 @@
   </section>
 
   <section>
+    <h2 style="margin:0 0 10px;font-size:1rem">Đồng bộ từ máy nhà (local bridge)</h2>
+    <p>Không thể thêm nút trên trang này để “chạy local”: trang admin chạy trên <strong>Railway</strong>, còn bridge phải chạy trên <strong>máy bạn</strong> (<code>127.0.0.1</code>). Nút ở đây chỉ gọi được API server, không mở được Node trên PC bạn.</p>
+    <p style="margin:8px 0 0"><strong>Việc cần làm:</strong> clone/pull repo <code>doxoso-api</code>, đặt <code>.env</code> (Supabase), trong thư mục gốc chạy:</p>
+    <pre style="margin-top:8px">npm install
+npm run local-bridge</pre>
+    <p>Trên cùng máy đó mở trình duyệt: <code>http://127.0.0.1:3847/</code> — điện thoại cùng WiFi dùng <code>http://&lt;IP-LAN-PC&gt;:3847/</code>. Tùy chọn <code>LOCAL_BRIDGE_TOKEN</code> trong <code>.env</code> rồi nhập token trên trang bridge.</p>
+  </section>
+
+  <section>
     <h2 style="margin:0 0 10px;font-size:1rem">Liên kết debug (mở tab mới)</h2>
     <p><a href="/debug-resolved-url?product=mega" target="_blank" rel="noopener">/debug-resolved-url?product=mega</a></p>
     <p><a href="/debug-vietlott-html?product=mega" target="_blank" rel="noopener">/debug-vietlott-html?product=mega</a></p>
