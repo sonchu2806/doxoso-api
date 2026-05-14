@@ -64,13 +64,15 @@ async function syncVietlottAll() {
   const results = {};
   for (const product of VIETLOTT_PRODUCT_IDS) {
     try {
-      const data = await scrapeVietlott(product, null, { forceNetwork: true });
+      const opts = { forceNetwork: true, forwardFillFromSupabase: true };
+      const data = await scrapeVietlott(product, null, opts);
       const picked = pickKyDrawFromScrape(data);
       results[product] = {
         ok: true,
         kySo: picked.kySo,
         drawDate: picked.drawDate,
         hasPayload: picked.hasPayload,
+        forwardFill: opts._forwardFillSummary || null,
       };
     } catch (e) {
       results[product] = { ok: false, error: e.message };

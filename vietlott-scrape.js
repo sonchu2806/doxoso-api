@@ -1321,7 +1321,13 @@ async function getXSKTFromSupabase(dai, drawDate) {
 
 /**
  * @param {string|null} kyso — null = kỳ hiện tại theo getCurrentInfo.
- * @param {{ forceNetwork?: boolean }} [opts] — forceNetwork: bỏ cache RAM + không trả sẵn từ Supabase (luôn ưu tiên gọi vietlott), dùng cho sync / job cập nhật.
+ * @param {{
+ *   forceNetwork?: boolean;
+ *   forwardFillFromSupabase?: boolean;
+ *   forwardFill?: { maxAhead?: number; delayMs?: number };
+ * }} [opts] — forceNetwork: bỏ cache RAM + không trả sẵn từ Supabase. forwardFillFromSupabase: trước khi scrape listing,
+ *   lấy kỳ lớn nhất đã có đủ số trong Supabase rồi lần lượt gọi trang chi tiết T+1, T+2… tới kỳ không còn kết quả (bỏ qua giới hạn “kỳ hiện tại” trên listing).
+ *   VIETLOTT_FORWARD_FILL_MAX (mặc định 64), VIETLOTT_FORWARD_FILL_DELAY_MS (mặc định 350).
  */
 async function scrapeVietlott(product, kyso, opts) {
   if (!VIETLOTT_PRODUCT_IDS.includes(product)) {
@@ -1329,6 +1335,19 @@ async function scrapeVietlott(product, kyso, opts) {
   }
 
   const forceNetwork = !!(opts && opts.forceNetwork);
+  const forwardFillFromSupabase = !!(opts && opts.forwardFillFromSupabase);
+  if (!kyso && forwardFillFromSupabase) {
+    try {
+      const sm = await forwardFillVietlottFromSupabase(product, (opts && opts.forwardFill) || {});
+      if (opts && typeof opts === 'object') opts._forwardFillSummary = sm;
+    } catch (e) {
+      console.warn('[vietlott forwardFill]', product, e.message);
+      if (opts && typeof opts === 'object') {
+        opts._forwardFillSummary = { product, error: e.message, fetched: [] };
+      }
+    }
+  }
+
   const cacheKey = 'vl_' + product + (kyso ? '_' + kyso : '');
   if (!forceNetwork) {
     const cached = getCache(cacheKey);
@@ -1762,6 +1781,111 @@ async function scrapeVietlott(product, kyso, opts) {
     await saveVietlottToSupabase(product, rk || result.kySo || kyso, result);
     return result;
   });
+}
+
+function vietlottResultHasPayload(data) {
+  return (
+    data &&
+    ((Array.isArray(data.numbers) && data.numbers.length > 0) ||
+      (Array.isArray(data.sets) && data.sets.length > 0))
+  );
+}
+
+/**
+ * Chỉ dùng URL chi tiết theo id kỳ (không gọi getUrlFromKySo — tránh chặn kỳ > “kỳ hiện tại” trên listing).
+ */
+async function scrapeVietlottDetailOnly(product, kyStr, detailOpts) {
+  detailOpts = detailOpts || {};
+  const forceNetwork = !!detailOpts.forceNetwork;
+  const cacheKey = 'vl_detail_' + product + '_' + kyStr;
+  if (!forceNetwork) {
+    const c = getCache(cacheKey);
+    if (c) return c;
+  }
+  const detailUrl = buildVietlottDetailUrl(product, kyStr);
+  if (!detailUrl) return null;
+  const listUrl = buildVietlottListingUrl(product);
+  const tryUrls = [detailUrl];
+  if ((product === 'max3d' || product === 'max3dpro') && listUrl) tryUrls.push(listUrl);
+  if (product === 'keno' && listUrl && !tryUrls.includes(listUrl)) tryUrls.push(listUrl);
+  else if (product !== 'max3d' && product !== 'max3dpro' && listUrl && !tryUrls.includes(listUrl)) {
+    tryUrls.push(listUrl);
+  }
+
+  for (const u of tryUrls) {
+    if (!u) continue;
+    const r = await scrapeWithAxios(u, product, kyStr);
+    if (r && vietlottResultHasPayload(r)) {
+      const rowKy = padVietlottId(product, r.kySo || kyStr || '');
+      if (rowKy) r.kySo = rowKy;
+      setCache(cacheKey, r);
+      await saveVietlottToSupabase(product, rowKy || r.kySo, r);
+      return r;
+    }
+  }
+  return null;
+}
+
+/**
+ * Neo theo kỳ lớn nhất đã có đủ số trong Supabase: thử T+1, T+2… qua trang chi tiết cho tới kỳ không parse được số.
+ * Nếu Supabase trống thì seed một lần bằng scrape kỳ hiện tại (listing).
+ */
+async function forwardFillVietlottFromSupabase(product, userOpts) {
+  userOpts = userOpts || {};
+  const maxAhead = Math.min(
+    500,
+    Math.max(1, parseInt(userOpts.maxAhead || process.env.VIETLOTT_FORWARD_FILL_MAX || '64', 10))
+  );
+  const delayMs = Math.max(
+    0,
+    parseInt(userOpts.delayMs || process.env.VIETLOTT_FORWARD_FILL_DELAY_MS || '350', 10)
+  );
+
+  const summary = {
+    product,
+    baseKy: null,
+    fetched: [],
+    stoppedAt: null,
+    reason: '',
+  };
+
+  const latestSb = await getLatestVietlottFromSupabase(product);
+  let baseNum = null;
+  if (latestSb && latestSb.kySo) {
+    baseNum = parseInt(String(latestSb.kySo).replace(/\D/g, ''), 10);
+    summary.baseKy = padVietlottId(product, baseNum);
+  }
+  if (baseNum == null || Number.isNaN(baseNum)) {
+    const seed = await scrapeVietlott(product, null, {
+      forceNetwork: true,
+      forwardFillFromSupabase: false,
+    });
+    if (!seed || !seed.kySo) {
+      summary.reason = 'no_seed';
+      return summary;
+    }
+    baseNum = parseInt(String(seed.kySo).replace(/\D/g, ''), 10);
+    summary.baseKy = padVietlottId(product, baseNum);
+    if (Number.isNaN(baseNum)) {
+      summary.reason = 'bad_seed';
+      return summary;
+    }
+  }
+
+  for (let i = 0; i < maxAhead; i++) {
+    const nextNum = baseNum + 1 + i;
+    const kyStr = padVietlottId(product, nextNum);
+    const row = await scrapeVietlottDetailOnly(product, kyStr, { forceNetwork: true });
+    if (!vietlottResultHasPayload(row)) {
+      summary.stoppedAt = kyStr;
+      summary.reason = 'no_more_results';
+      return summary;
+    }
+    summary.fetched.push(kyStr);
+    if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+  }
+  summary.reason = 'max_steps';
+  return summary;
 }
 
 const XSKT_REGIONS = {
@@ -2438,6 +2562,8 @@ module.exports = {
   normalizeDrawDateForSupabase,
   detectRegionByDai,
   scrapeVietlott,
+  scrapeVietlottDetailOnly,
+  forwardFillVietlottFromSupabase,
   scrapeAllXSKT,
   saveVietlottToSupabase,
   saveXSKTToSupabase,
