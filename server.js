@@ -45,6 +45,7 @@ const {
   XSKT_MIEN_BAC_LABEL,
   isMienBacDaiQuery,
   normalizeDrawDateForSupabase,
+  diagnoseVietlottConnectivity,
 } = vs;
 
 /** Kỳ theo lịch quay (khi Supabase mới có vài dòng — ví dụ Lotto 5/35). */
@@ -282,6 +283,23 @@ app.get('/admin/supabase-status', async (req, res) => {
     sampleVietlott: vlSample.error ? { error: vlSample.error.message } : vlSample.data || [],
     sampleXskt: xsSample.error ? { error: xsSample.error.message } : xsSample.data || [],
   });
+});
+
+/**
+ * Chẩn đoán chặn Vietlott: gọi trang listing từ chính IP server (giống warm/scrape).
+ * ?product=mega|power|keno|...
+ * Xem probes[].status (403), cfRay, hints, bodySnippet.
+ */
+app.get('/admin/vietlott-connectivity', async (req, res) => {
+  const product = String(req.query.product || 'mega')
+    .toLowerCase()
+    .trim();
+  try {
+    const report = await diagnoseVietlottConnectivity(product);
+    res.json(Object.assign({ success: true }, report));
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 /**

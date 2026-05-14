@@ -156,6 +156,20 @@ function vietlottAxiosHeaders() {
   };
 }
 
+function vietlottResolveFetchUrl(rawUrl) {
+  const raw = String(rawUrl || '').trim();
+  if (!raw.includes('vietlott.vn')) {
+    return { fetchUrl: raw, usedProxy: false, busted: raw };
+  }
+  const sep = raw.includes('?') ? '&' : '?';
+  const busted = raw + sep + 'nocatche=1&_vlcb=' + Date.now();
+  const fetchUrl =
+    VIETLOTT_PROXY && busted.includes('vietlott.vn')
+      ? VIETLOTT_PROXY + '?url=' + encodeURIComponent(busted)
+      : busted;
+  return { fetchUrl, usedProxy: !!VIETLOTT_PROXY, busted };
+}
+
 /**
  * GET HTML từ vietlott.vn — dùng chung cho listing, scrape axios.
  * Nếu set VIETLOTT_PROXY_URL (HTTP proxy forward ?url=), gọi qua proxy (thường hết 403 trên Railway).
@@ -174,18 +188,93 @@ async function vietlottGetHtml(absoluteUrl, opt) {
     });
     return typeof data === 'string' ? data : String(data ?? '');
   }
-  const sep = raw.includes('?') ? '&' : '?';
-  const busted = raw + sep + 'nocatche=1&_vlcb=' + Date.now();
-  const fetchUrl =
-    VIETLOTT_PROXY && busted.includes('vietlott.vn')
-      ? VIETLOTT_PROXY + '?url=' + encodeURIComponent(busted)
-      : busted;
+  const { fetchUrl } = vietlottResolveFetchUrl(raw);
   const { data } = await axios.get(fetchUrl, {
     headers: vietlottAxiosHeaders(),
     timeout: opt.timeout != null ? opt.timeout : 25000,
     maxRedirects: 8,
   });
   return typeof data === 'string' ? data : String(data ?? '');
+}
+
+/**
+ * Kiểm tra từ server (Railway) xem HTTP tới trang listing Vietlott có bị 403/WAF không.
+ * Gọi GET /admin/vietlott-connectivity?product=mega trên trang admin nội bộ.
+ */
+async function diagnoseVietlottConnectivity(product) {
+  const p = VIETLOTT_PRODUCT_IDS.includes(product) ? product : 'mega';
+  const listUrl = buildVietlottListingUrl(p);
+  if (!listUrl) {
+    return { product: p, error: 'Không build được listing URL' };
+  }
+  const { fetchUrl, usedProxy, busted } = vietlottResolveFetchUrl(listUrl);
+
+  const interpretBody = (status, headers, body) => {
+    const hints = [];
+    const h = headers || {};
+    const low = String(body || '').toLowerCase();
+    if (h['cf-ray'] || low.includes('cloudflare') || low.includes('cf-browser-verification')) {
+      hints.push('Có dấu hiệu Cloudflare (cf-ray / challenge) — request server thường bị chặn hoặc cần JS.');
+    }
+    if (low.includes('captcha') || low.includes('hcaptcha') || low.includes('turnstile')) {
+      hints.push('Trang có captcha / turnstile.');
+    }
+    if (status === 403) {
+      hints.push('403: thường là chặn theo IP (datacenter) hoặc WAF; thử VIETLOTT_PROXY_URL (residential/VN).');
+    }
+    if (status === 429) {
+      hints.push('429: rate limit — giảm tần suất warm/scrape.');
+    }
+    if (status === 200 && low.includes('bong_tron') === false && low.includes('view-detail') === false) {
+      hints.push('200 nhưng HTML không giống trang kết quả — có thể là trang lỗi/redirect lạ.');
+    }
+    return hints;
+  };
+
+  const probe = async (label, headers) => {
+    try {
+      const r = await axios.get(fetchUrl, {
+        headers,
+        timeout: 18000,
+        maxRedirects: 8,
+        validateStatus: () => true,
+      });
+      const body = typeof r.data === 'string' ? r.data : String(r.data ?? '');
+      const hints = interpretBody(r.status, r.headers, body);
+      return {
+        label,
+        status: r.status,
+        ok: r.status >= 200 && r.status < 300,
+        contentType: r.headers['content-type'] || null,
+        cfRay: r.headers['cf-ray'] || null,
+        server: r.headers['server'] || null,
+        htmlLen: body.length,
+        hints,
+        bodySnippet: body.slice(0, 480).replace(/\s+/g, ' '),
+      };
+    } catch (e) {
+      return { label, error: e.message, code: e.code };
+    }
+  };
+
+  const primary = await probe('browser-like', vietlottAxiosHeaders());
+  const minimal = await probe('minimal', {
+    'User-Agent': 'curl/8.4.0',
+    Accept: '*/*',
+  });
+
+  return {
+    product: p,
+    listUrl,
+    bustedListingUrl: busted,
+    fetchUrlUsed: fetchUrl,
+    usedProxy,
+    proxyEnvSet: !!String(process.env.VIETLOTT_PROXY_URL || '').trim(),
+    nodeTlsRejectUnauthorized: process.env.NODE_TLS_REJECT_UNAUTHORIZED,
+    whyWorkedBefore:
+      'Trước đây Vietlott/CDN ít chặn IP cloud hơn, hoặc bạn chạy từ mạng nhà (IP “sạch”). Kỳ vẫn có thể thấy qua Supabase (warm/cron) dù listing 403. WAF thường siết dần theo thời gian.',
+    probes: [primary, minimal],
+  };
 }
 
 const PRIZE_LABELS = {
@@ -2281,4 +2370,5 @@ module.exports = {
   backfillXSKTDateRangeToSupabase,
   XSKT_MIEN_BAC_LABEL,
   isMienBacDaiQuery,
+  diagnoseVietlottConnectivity,
 };
