@@ -241,6 +241,11 @@ async function diagnoseVietlottConnectivity(product) {
       });
       const body = typeof r.data === 'string' ? r.data : String(r.data ?? '');
       const hints = interpretBody(r.status, r.headers, body);
+      if (isCloudflareChallengeHtml(body)) {
+        hints.push(
+          'Trang "Just a moment" / challenge JS — axios hoặc Worker forward không chạy được JS; cần Puppeteer/Browserless hoặc IP residential.'
+        );
+      }
       return {
         label,
         status: r.status,
@@ -249,6 +254,7 @@ async function diagnoseVietlottConnectivity(product) {
         cfRay: r.headers['cf-ray'] || null,
         server: r.headers['server'] || null,
         htmlLen: body.length,
+        challengePage: isCloudflareChallengeHtml(body),
         hints,
         bodySnippet: body.slice(0, 480).replace(/\s+/g, ' '),
       };
@@ -263,6 +269,9 @@ async function diagnoseVietlottConnectivity(product) {
     Accept: '*/*',
   });
 
+  const cfWorker =
+    usedProxy && /workers\.dev|cloudflareworkers/i.test(String(fetchUrl || ''));
+
   return {
     product: p,
     listUrl,
@@ -271,6 +280,11 @@ async function diagnoseVietlottConnectivity(product) {
     usedProxy,
     proxyEnvSet: !!String(process.env.VIETLOTT_PROXY_URL || '').trim(),
     nodeTlsRejectUnauthorized: process.env.NODE_TLS_REJECT_UNAUTHORIZED,
+    cloudflareChallengePage: !!(primary && primary.challengePage) || !!(minimal && minimal.challengePage),
+    cfWorkerProxySuspected: cfWorker,
+    proxyWorkerNote: cfWorker
+      ? 'Worker fetch: Vietlott/Cloudflare trả trang "Just a moment" cho IP egress của Worker — axios không chạy JS. App đã fallback Puppeteer trực tiếp vietlott (không qua proxy) cho getCurrentInfo; nếu vẫn fail — dùng BROWSERLESS_API_KEY hoặc residential/VN relay.'
+      : null,
     whyWorkedBefore:
       'Trước đây Vietlott/CDN ít chặn IP cloud hơn, hoặc bạn chạy từ mạng nhà (IP “sạch”). Kỳ vẫn có thể thấy qua Supabase (warm/cron) dù listing 403. WAF thường siết dần theo thời gian.',
     probes: [primary, minimal],
@@ -337,64 +351,133 @@ async function withBrowser(fn) {
   }
 }
 
+function isCloudflareChallengeHtml(html) {
+  const s = String(html || '');
+  if (s.length < 80) return false;
+  const low = s.toLowerCase();
+  return (
+    low.includes('just a moment') ||
+    low.includes('cf-browser-verification') ||
+    low.includes('challenges.cloudflare.com') ||
+    low.includes('checking your browser before accessing') ||
+    (low.includes('turnstile') && low.includes('cloudflare'))
+  );
+}
+
+/** Parse kỳ + ngày từ DOM listing (cheerio) — dùng chung axios + puppeteer. */
+function parseVietlottListingPage($, product) {
+  if (product === 'keno') {
+    const link = $('a[href*="view-detail-keno-result?id="]').first();
+    let currentKy = '';
+    let currentDate = '';
+    if (link.length) {
+      const href = link.attr('href') || '';
+      const idMatch = href.match(/[?&]id=(\d+)/i);
+      if (idMatch) currentKy = idMatch[1];
+      let nearText = '';
+      let $n = link;
+      for (let depth = 0; depth < 10; depth++) {
+        $n = $n.parent();
+        if (!$n.length) break;
+        nearText += ' ' + ($n.text() || '');
+        const dm = nearText.match(/(\d{2}\/\d{2}\/\d{4})/);
+        if (dm) {
+          currentDate = dm[0];
+          break;
+        }
+      }
+      if (!currentDate) {
+        const blob =
+          (link.text() || '') +
+          ' ' +
+          (link.nextAll().text() || '') +
+          ' ' +
+          ($('body').text() || '');
+        const dm2 = blob.match(/(\d{2}\/\d{2}\/\d{4})/);
+        if (dm2) currentDate = dm2[0];
+      }
+    }
+    return { currentKy, currentDate };
+  }
+
+  const blob =
+    ($('#divLeftContent').text() || '') +
+    ' ' +
+    ($('.chitietketqua').first().text() || '') +
+    ' ' +
+    ($('body').text() || '');
+  const kyMatch = blob.match(/#\s*(\d+)/);
+  const dateMatch = blob.match(/(\d{2}\/\d{2}\/\d{4})/);
+  return {
+    currentKy: kyMatch ? kyMatch[1] : '',
+    currentDate: dateMatch ? dateMatch[0] : '',
+  };
+}
+
+/**
+ * Khi axios/proxy trả trang CF challenge: thử Puppeteer **trực tiếp** tới vietlott.vn (không qua VIETLOTT_PROXY).
+ * Worker forward thường nhận challenge HTML vì IP egress của Worker cũng bị CF.
+ */
+async function getCurrentKyFromVietlottListingPuppeteer(listUrl, product) {
+  const sep = listUrl.includes('?') ? '&' : '?';
+  const directUrl = listUrl + sep + 'nocatche=1&_vlcb=' + Date.now();
+  return withBrowser(async (browser) => {
+    const page = await browser.newPage();
+    await page.setUserAgent(VIETLOTT_UA);
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8',
+    });
+    try {
+      await page.goto(directUrl, { waitUntil: 'networkidle2', timeout: 90000 });
+    } catch (_e) {
+      await page.goto(directUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    }
+    for (let i = 0; i < 20; i++) {
+      const title = await page.title().catch(() => '');
+      if (!String(title).includes('Just a moment')) break;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    const html = await page.content();
+    if (isCloudflareChallengeHtml(html)) {
+      console.warn('[getCurrentKyFromVietlottListing] puppeteer vẫn gặp Cloudflare challenge', product);
+      return { currentKy: '', currentDate: '' };
+    }
+    const $ = cheerio.load(html);
+    return parseVietlottListingPage($, product);
+  });
+}
+
 /** Kỳ + ngày từ trang kết quả vietlott.vn (thay luồng ketquadientoan đã tắt). */
 async function getCurrentKyFromVietlottListing(product) {
   const listUrl = buildVietlottListingUrl(product);
   if (!listUrl) return { currentKy: '', currentDate: '' };
   try {
     const html = await vietlottGetHtml(listUrl, { timeout: 22000 });
-    const $ = cheerio.load(html);
-
-    if (product === 'keno') {
-      const link = $('a[href*="view-detail-keno-result?id="]').first();
-      let currentKy = '';
-      let currentDate = '';
-      if (link.length) {
-        const href = link.attr('href') || '';
-        const idMatch = href.match(/[?&]id=(\d+)/i);
-        if (idMatch) currentKy = idMatch[1];
-        let nearText = '';
-        let $n = link;
-        for (let depth = 0; depth < 10; depth++) {
-          $n = $n.parent();
-          if (!$n.length) break;
-          nearText += ' ' + ($n.text() || '');
-          const dm = nearText.match(/(\d{2}\/\d{2}\/\d{4})/);
-          if (dm) {
-            currentDate = dm[0];
-            break;
-          }
-        }
-        if (!currentDate) {
-          const blob =
-            (link.text() || '') +
-            ' ' +
-            (link.nextAll().text() || '') +
-            ' ' +
-            ($('body').text() || '');
-          const dm2 = blob.match(/(\d{2}\/\d{2}\/\d{4})/);
-          if (dm2) currentDate = dm2[0];
-        }
-      }
-      return { currentKy, currentDate };
+    if (isCloudflareChallengeHtml(html)) {
+      console.warn(
+        '[getCurrentKyFromVietlottListing] Trang Cloudflare challenge (axios) — thử puppeteer trực tiếp vietlott.vn',
+        product
+      );
+      return await getCurrentKyFromVietlottListingPuppeteer(listUrl, product);
     }
-
-    const blob =
-      ($('#divLeftContent').text() || '') +
-      ' ' +
-      ($('.chitietketqua').first().text() || '') +
-      ' ' +
-      ($('body').text() || '');
-    const kyMatch = blob.match(/#\s*(\d+)/);
-    const dateMatch = blob.match(/(\d{2}\/\d{2}\/\d{4})/);
-    return {
-      currentKy: kyMatch ? kyMatch[1] : '',
-      currentDate: dateMatch ? dateMatch[0] : '',
-    };
+    const $ = cheerio.load(html);
+    const parsed = parseVietlottListingPage($, product);
+    if (
+      (!parsed.currentKy || String(parsed.currentKy).trim() === '') &&
+      (html.includes('cloudflare') || html.length > 3000)
+    ) {
+      const retry = await getCurrentKyFromVietlottListingPuppeteer(listUrl, product);
+      if (retry.currentKy) return retry;
+    }
+    return parsed;
   } catch (e) {
     const st = e.response && e.response.status;
     console.warn('[getCurrentKyFromVietlottListing]', product, st || '', e.message);
-    return { currentKy: '', currentDate: '' };
+    try {
+      return await getCurrentKyFromVietlottListingPuppeteer(listUrl, product);
+    } catch (_e2) {
+      return { currentKy: '', currentDate: '' };
+    }
   }
 }
 
