@@ -1326,8 +1326,8 @@ async function getXSKTFromSupabase(dai, drawDate) {
  *   forwardFillFromSupabase?: boolean;
  *   forwardFill?: { maxAhead?: number; delayMs?: number };
  * }} [opts] — forceNetwork: bỏ cache RAM + không trả sẵn từ Supabase. forwardFillFromSupabase: trước khi scrape listing,
- *   lấy kỳ lớn nhất đã có đủ số trong Supabase rồi lần lượt gọi trang chi tiết T+1, T+2… tới kỳ không còn kết quả (bỏ qua giới hạn “kỳ hiện tại” trên listing).
- *   VIETLOTT_FORWARD_FILL_MAX (mặc định 64), VIETLOTT_FORWARD_FILL_DELAY_MS (mặc định 350).
+ *   lấy kỳ lớn nhất đã có đủ số trong Supabase rồi dò T+1, T+2… qua **chỉ** trang chi tiết ?id= cho tới kỳ không còn kết quả hợp lệ (dừng ngay; mọi game cùng luật).
+ *   VIETLOTT_FORWARD_FILL_MAX (mặc định 48) chỉ là trần an toàn, VIETLOTT_FORWARD_FILL_DELAY_MS (mặc định 350).
  */
 async function scrapeVietlott(product, kyso, opts) {
   if (!VIETLOTT_PRODUCT_IDS.includes(product)) {
@@ -1836,14 +1836,8 @@ async function scrapeVietlottDetailOnly(product, kyStr, detailOpts) {
   }
   const detailUrl = buildVietlottDetailUrl(product, kyStr);
   if (!detailUrl) return null;
-  const listUrl = buildVietlottListingUrl(product);
-  // Mega/Power/Lotto: listing luôn là kỳ mới nhất — dễ lệch với id đang forward; chỉ gọi trang chi tiết.
+  // Forward / detail-only: chỉ trang chi tiết theo ?id= — listing luôn là kỳ mới nhất, dễ lệch và gây lặp request vô ích.
   const tryUrls = [detailUrl];
-  if (product === 'max3d' || product === 'max3dpro') {
-    if (listUrl) tryUrls.push(listUrl);
-  } else if (product === 'keno' && listUrl && !tryUrls.includes(listUrl)) {
-    tryUrls.push(listUrl);
-  }
 
   for (const u of tryUrls) {
     if (!u) continue;
@@ -1860,14 +1854,15 @@ async function scrapeVietlottDetailOnly(product, kyStr, detailOpts) {
 }
 
 /**
- * Neo theo kỳ lớn nhất đã có đủ số trong Supabase: thử T+1, T+2… qua trang chi tiết cho tới kỳ không parse được số.
- * Nếu Supabase trống thì seed một lần bằng scrape kỳ hiện tại (listing).
+ * Neo theo kỳ lớn nhất đã có đủ số trong Supabase: thử T+1, T+2… qua **trang chi tiết** cho tới kỳ
+ * không còn kết quả hợp lệ (parse rỗng / kỳ HTML không khớp ?id=) — **dừng ngay** tại kỳ đó.
+ * `VIETLOTT_FORWARD_FILL_MAX` chỉ là trần an toàn (mặc định 48), không phải số kỳ phải dò.
  */
 async function forwardFillVietlottFromSupabase(product, userOpts) {
   userOpts = userOpts || {};
   const maxAhead = Math.min(
     500,
-    Math.max(1, parseInt(userOpts.maxAhead || process.env.VIETLOTT_FORWARD_FILL_MAX || '64', 10))
+    Math.max(1, parseInt(userOpts.maxAhead || process.env.VIETLOTT_FORWARD_FILL_MAX || '48', 10))
   );
   const delayMs = Math.max(
     0,
@@ -1909,7 +1904,11 @@ async function forwardFillVietlottFromSupabase(product, userOpts) {
     const nextNum = baseNum + 1 + i;
     const kyStr = padVietlottId(product, nextNum);
     const row = await scrapeVietlottDetailOnly(product, kyStr, { forceNetwork: true });
-    if (!vietlottResultHasPayload(row)) {
+    if (
+      !row ||
+      !vietlottResultHasPayload(row) ||
+      !vietlottParsedKyAcceptableForRequest(product, kyStr, row)
+    ) {
       summary.stoppedAt = kyStr;
       summary.reason = 'no_more_results';
       return summary;
@@ -1918,6 +1917,12 @@ async function forwardFillVietlottFromSupabase(product, userOpts) {
     if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
   }
   summary.reason = 'max_steps';
+  summary.stoppedAt = padVietlottId(product, baseNum + maxAhead);
+  console.warn(
+    '[vietlott forwardFill]',
+    product,
+    'đạt trần an toàn maxAhead=' + maxAhead + ' (đã lấy ' + summary.fetched.length + ' kỳ). Tăng VIETLOTT_FORWARD_FILL_MAX nếu còn thiếu.'
+  );
   return summary;
 }
 
