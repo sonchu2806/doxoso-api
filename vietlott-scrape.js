@@ -1273,9 +1273,16 @@ async function probeLatestKenoWithAxios(info) {
 
 // Lưu kết quả XSKT vào Supabase
 async function saveXSKTToSupabase(dai, drawDate, data) {
-  if (!supabase) return;
+  if (!supabase) {
+    console.warn('[supabase] xskt skip — chưa cấu hình SUPABASE_URL / key');
+    return false;
+  }
   try {
     const viDate = normalizeDrawDateForSupabase(drawDate);
+    if (!viDate) {
+      console.error('[supabase] xskt skip — draw_date không hợp lệ:', dai, drawDate);
+      return false;
+    }
     const { error } = await supabase.from('xskt_results').upsert(
       {
         dai,
@@ -1286,12 +1293,14 @@ async function saveXSKTToSupabase(dai, drawDate, data) {
       { onConflict: 'dai,draw_date' }
     );
     if (error) {
-      console.error('[supabase] xskt upsert failed:', dai, drawDate, error.message);
-      return;
+      console.error('[supabase] xskt upsert failed:', dai, drawDate, viDate, error.message);
+      return false;
     }
-    console.log('[supabase] saved xskt', dai, drawDate);
+    console.log('[supabase] saved xskt', dai, drawDate, '→', viDate);
+    return true;
   } catch (e) {
     console.error('[supabase] save xskt error:', e.message);
+    return false;
   }
 }
 
@@ -2168,6 +2177,7 @@ async function scrapeAllXSKT(dateStr, region = 'mn') {
     }
     if (Object.keys(raw).length > 0) {
       const quickResults = safeRegion === 'mb' ? normalizeMienBacXsktMap(raw) : raw;
+      stampXsktResultsDrawDate(quickResults, dateStr);
       console.log('[XSKT all] using axios+cheerio, tìm được', Object.keys(quickResults).length, 'đài');
       setCache(cacheKey, quickResults);
       return quickResults;
@@ -2310,6 +2320,7 @@ async function scrapeAllXSKT(dateStr, region = 'mn') {
     });
 
     let finalResults = safeRegion === 'mb' ? normalizeMienBacXsktMap(results) : results;
+    stampXsktResultsDrawDate(finalResults, dateStr);
     console.log('[XSKT all] Tìm được', Object.keys(finalResults).length, 'đài');
     setCache(cacheKey, finalResults);
     return finalResults;
@@ -2517,6 +2528,26 @@ function formatMinhNgocDaySlug(date) {
   return dd + '-' + mm + '-' + yyyy;
 }
 
+/** DD-MM-YYYY (slug URL) → dd/mm/yyyy */
+function minhNgocSlugToViDate(slug) {
+  const m = String(slug || '').trim().match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (!m) return '';
+  return m[1] + '/' + m[2] + '/' + m[3];
+}
+
+/** Gán drawDate theo slug URL — tránh HTML Minh Ngọc luôn hiện ngày hôm nay. */
+function stampXsktResultsDrawDate(results, dateStr) {
+  if (!results || !dateStr) return results;
+  const vi = minhNgocSlugToViDate(dateStr);
+  if (!vi) return results;
+  for (const k of Object.keys(results)) {
+    if (results[k] && typeof results[k] === 'object') {
+      results[k].drawDate = vi;
+    }
+  }
+  return results;
+}
+
 /**
  * Quét XSKT theo từng ngày trong [startDate, endDate], upsert Supabase (mb / mt / mn).
  * Tránh gọi quá dày: delay giữa mỗi lần scrape (mặc định từ env XSKT_BACKFILL_DELAY_MS hoặc 400).
@@ -2576,9 +2607,10 @@ async function backfillXSKTDateRangeToSupabase(startDate, endDate, options) {
           stats.byRegion[region].empty++;
           continue;
         }
+        const drawDateForSave = minhNgocSlugToViDate(slug);
         for (const [dai, row] of Object.entries(all)) {
-          await saveXSKTToSupabase(dai, row.drawDate, row);
-          stats.rowsSaved++;
+          const saved = await saveXSKTToSupabase(dai, drawDateForSave || row.drawDate, row);
+          if (saved) stats.rowsSaved++;
         }
         stats.byRegion[region].ok++;
       } catch (e) {
@@ -2622,6 +2654,8 @@ module.exports = {
   estimateBackfillStepsForDays,
   backfillVietlottMonthsToSupabase,
   formatMinhNgocDaySlug,
+  minhNgocSlugToViDate,
+  stampXsktResultsDrawDate,
   backfillXSKTDateRangeToSupabase,
   XSKT_MIEN_BAC_LABEL,
   isMienBacDaiQuery,
