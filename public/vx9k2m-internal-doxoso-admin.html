@@ -28,6 +28,7 @@
     <button type="button" id="btn-test" class="secondary">GET /test-connection</button>
     <button type="button" id="btn-sb">GET /admin/supabase-status</button>
     <button type="button" id="btn-vl-net" class="secondary">GET /admin/vietlott-connectivity (403?)</button>
+    <button type="button" id="btn-scan-usage" class="secondary">GET /admin/scan-usage</button>
     <pre id="out">—</pre>
   </section>
 
@@ -54,6 +55,7 @@
     document.getElementById('btn-test').onclick = function () { get('/test-connection'); };
     document.getElementById('btn-sb').onclick = function () { get('/admin/supabase-status'); };
     document.getElementById('btn-vl-net').onclick = function () { get('/admin/vietlott-connectivity?product=mega'); };
+    document.getElementById('btn-scan-usage').onclick = function () { get('/admin/scan-usage'); };
   </script>
 </body>
 </html>

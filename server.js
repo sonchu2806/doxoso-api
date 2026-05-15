@@ -1,6 +1,9 @@
+require('dotenv').config();
+
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
+const multer = require('multer');
 const cron = require('node-cron');
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -19,7 +22,20 @@ app.use(express.json());
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 
+const scanVision = require('./scan-vision');
 const vs = require('./vietlott-scrape');
+
+const scanUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: Math.max(500000, parseInt(process.env.SCAN_VISION_MAX_IMAGE_BYTES || '1500000', 10)),
+  },
+});
+
+function clientIpFromReq(req) {
+  const xf = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return xf || req.socket?.remoteAddress || '';
+}
 const {
   VIETLOTT_PRODUCT_IDS,
   DRAW_DAYS,
@@ -250,6 +266,35 @@ app.get('/xskt', async (req, res) => {
 });
 
 /** Đếm dòng + vài mẫu để biết dữ liệu đã vào Supabase chưa (cần env + quyền SELECT trên bảng). */
+/** Đọc vé từ ảnh (Claude Vision). multipart field `image`, body/query `channel=xskt|vietlott`. */
+app.post('/api/scan-ticket', scanUpload.single('image'), async (req, res) => {
+  const channel = String(req.body?.channel || req.query?.channel || 'xskt')
+    .toLowerCase()
+    .trim();
+  const ch = channel === 'vietlott' ? 'vietlott' : 'xskt';
+  if (!req.file || !req.file.buffer) {
+    return res.status(400).json({ success: false, error: 'Thiếu file ảnh (field name: image).' });
+  }
+  try {
+    const out = await scanVision.scanTicketFromImage(req.file.buffer, ch, {
+      clientIp: clientIpFromReq(req),
+      userAgent: String(req.headers['user-agent'] || '').slice(0, 200),
+    });
+    if (!out.success) {
+      return res.status(out.status || 500).json(out);
+    }
+    return res.json(out);
+  } catch (e) {
+    console.error('[api/scan-ticket]', e.message);
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+/** Thống kê lượt scan / token (bộ nhớ server — reset khi restart). */
+app.get('/admin/scan-usage', (_req, res) => {
+  res.json({ success: true, ...scanVision.getUsageStats() });
+});
+
 app.get('/admin/supabase-status', async (req, res) => {
   if (!supabase) {
     return res.json({

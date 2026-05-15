@@ -177,10 +177,46 @@
       will-change: transform;
     }
     .saved-swipe-front .saved-card { margin-bottom: 0; }
+    .scan-overlay {
+      position: fixed; inset: 0; z-index: 200; background: rgba(17,17,20,0.92);
+      display: none; flex-direction: column; padding: 52px 16px 24px;
+    }
+    .scan-overlay.open { display: flex; }
+    .scan-overlay h2 { color: #fff; font-size: 17px; margin: 0 0 8px; text-align: center; }
+    .scan-overlay p { color: rgba(255,255,255,0.65); font-size: 13px; text-align: center; margin: 0 0 16px; }
+    .scan-actions { display: flex; flex-direction: column; gap: 10px; max-width: 320px; margin: 0 auto; width: 100%; }
+    .scan-actions button {
+      height: 48px; border-radius: 12px; border: none; font-weight: 700; font-size: 15px; cursor: pointer;
+    }
+    .scan-actions .scan-primary { background: #EB2F98; color: #fff; }
+    .scan-actions .scan-secondary { background: rgba(255,255,255,0.12); color: #fff; }
+    .scan-actions .scan-ghost { background: transparent; color: rgba(255,255,255,0.7); border: 1px solid rgba(255,255,255,0.25); }
+    .scan-loading { display: none; text-align: center; color: #fff; margin-top: 24px; }
+    .scan-loading.show { display: block; }
+    .scan-preview { display: none; max-width: 280px; margin: 12px auto; border-radius: 12px; max-height: 160px; object-fit: contain; }
+    .scan-preview.show { display: block; }
+    #scan-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
   </style>
 </head>
 <body>
+  <input type="file" id="scan-file-input" accept="image/*" capture="environment" />
+  <div class="scan-overlay" id="scan-overlay" aria-hidden="true">
+    <button type="button" id="scan-close" style="position:absolute;top:12px;right:12px;width:40px;height:40px;border:none;border-radius:20px;background:rgba(255,255,255,0.15);color:#fff;font-size:18px;cursor:pointer">✕</button>
+    <h2>Scan vé số</h2>
+    <p>Chụp hoặc chọn ảnh vé. Server đọc bằng Claude Vision (có giới hạn lượt/ngày).</p>
+    <img id="scan-preview" class="scan-preview" alt="" />
+    <div class="scan-loading" id="scan-loading">
+      <p style="font-weight:700">Đang đọc vé…</p>
+      <p style="font-size:12px;opacity:0.7">Có thể mất 5–15 giây</p>
+    </div>
+    <div class="scan-actions">
+      <button type="button" class="scan-primary" id="scan-pick-camera">Chụp / chọn ảnh</button>
+      <button type="button" class="scan-secondary" id="scan-pick-gallery">Chọn từ thư viện</button>
+      <button type="button" class="scan-ghost" id="scan-cancel">Đóng</button>
+    </div>
+  </div>
   <div class="toast" id="toast"></div>
+
   <div id="win-fx" class="win-fx hidden" aria-hidden="true"></div>
   <div class="wrap" id="main-scroll">
     <div class="title-row">

@@ -283,6 +283,199 @@
     }, 3200);
   }
 
+  var scanBusy = false;
+
+  function findXsktRegionForDai(dai) {
+    var d = String(dai || '').trim();
+    if (!d) return null;
+    var keys = ['mb', 'mn', 'mt'];
+    for (var ki = 0; ki < keys.length; ki++) {
+      var reg = XSKT_SCHEDULE[keys[ki]];
+      for (var w in reg) {
+        if (!Object.prototype.hasOwnProperty.call(reg, w)) continue;
+        var list = reg[w];
+        for (var i = 0; i < list.length; i++) {
+          if (list[i] === d) return keys[ki];
+        }
+      }
+    }
+    return null;
+  }
+
+  function setScanOverlayOpen(open) {
+    var ov = document.getElementById('scan-overlay');
+    var load = document.getElementById('scan-loading');
+    var prev = document.getElementById('scan-preview');
+    if (!ov) return;
+    if (open) {
+      ov.classList.add('open');
+      ov.setAttribute('aria-hidden', 'false');
+    } else {
+      ov.classList.remove('open');
+      ov.setAttribute('aria-hidden', 'true');
+      scanBusy = false;
+      if (load) load.classList.remove('show');
+      if (prev) {
+        prev.classList.remove('show');
+        prev.removeAttribute('src');
+      }
+    }
+  }
+
+  function setScanLoading(on) {
+    var load = document.getElementById('scan-loading');
+    var acts = document.querySelector('#scan-overlay .scan-actions');
+    if (load) load.classList.toggle('show', !!on);
+    if (acts) acts.style.display = on ? 'none' : '';
+    scanBusy = !!on;
+  }
+
+  function applyScanResult(data) {
+    if (!data) return;
+    if (data.type === 'xskt') {
+      state.channel = 'xskt';
+      state.tab = 'do';
+      if (data.dai) state.xsktDai = data.dai;
+      var reg = findXsktRegionForDai(state.xsktDai);
+      if (reg) state.xsktRegion = reg;
+      if (data.drawDate) state.xsktDate = data.drawDate;
+      if (data.ticketNumber) state.xsktTicket = String(data.ticketNumber).replace(/\D/g, '');
+      state.apiResult = state.checkResult = null;
+      setScanOverlayOpen(false);
+      render();
+      toast('Đã điền vé XSKT từ ảnh · bấm Dò kết quả để kiểm tra');
+      return;
+    }
+    if (data.type === 'vietlott') {
+      state.channel = 'vietlott';
+      state.tab = 'do';
+      var p = String(data.product || 'mega').toLowerCase().replace(/\s+/g, '');
+      if (!{ mega: 1, power: 1, keno: 1, max3d: 1, max3dpro: 1, lotto535: 1 }[p]) p = 'mega';
+      state.product = p;
+      state.picker = [];
+      state.lottoSpec = [];
+      state.slots = ['', '', ''];
+      state.pro = [
+        ['', '', ''],
+        ['', '', ''],
+      ];
+      state.kenoText = null;
+      state.kenoTab = 'so';
+      var nums = Array.isArray(data.numbers) ? data.numbers : [];
+      var n;
+      var i;
+      if (p === 'mega' || p === 'power') {
+        for (i = 0; i < nums.length && state.picker.length < 6; i++) {
+          n = parseInt(nums[i], 10);
+          if (!Number.isNaN(n) && n > 0) state.picker.push(n);
+        }
+        state.picker.sort(function (a, b) {
+          return a - b;
+        });
+      } else if (p === 'keno') {
+        for (i = 0; i < nums.length && state.picker.length < 10; i++) {
+          n = parseInt(nums[i], 10);
+          if (!Number.isNaN(n) && n > 0) state.picker.push(n);
+        }
+        state.picker.sort(function (a, b) {
+          return a - b;
+        });
+      } else if (p === 'lotto535') {
+        for (i = 0; i < nums.length && state.picker.length < 5; i++) {
+          n = parseInt(nums[i], 10);
+          if (!Number.isNaN(n) && n > 0) state.picker.push(n);
+        }
+        state.picker.sort(function (a, b) {
+          return a - b;
+        });
+        if (nums.length > 5) {
+          n = parseInt(nums[5], 10);
+          if (!Number.isNaN(n) && n > 0) state.lottoSpec = [n];
+        }
+      } else if (p === 'max3d') {
+        var s = String(nums.join ? nums.join('') : nums[0] || '').replace(/\D/g, '').slice(0, 3);
+        for (i = 0; i < 3; i++) state.slots[i] = s[i] || '';
+      } else if (p === 'max3dpro') {
+        var joined = String(nums.join ? nums.join('') : '').replace(/\D/g, '');
+        if (joined.length >= 6) {
+          for (i = 0; i < 3; i++) state.pro[0][i] = joined[i];
+          for (i = 0; i < 3; i++) state.pro[1][i] = joined[i + 3];
+        }
+      }
+      state.apiResult = state.checkResult = null;
+      loadKyList();
+      setScanOverlayOpen(false);
+      render();
+      toast('Đã điền Vietlott từ ảnh · bấm Dò kết quả');
+    }
+  }
+
+  function uploadScanImage(file) {
+    if (!file || scanBusy) return;
+    var channel = state.channel === 'vietlott' ? 'vietlott' : 'xskt';
+    var prev = document.getElementById('scan-preview');
+    if (prev) {
+      var url = URL.createObjectURL(file);
+      prev.src = url;
+      prev.classList.add('show');
+      prev.onload = function () {
+        URL.revokeObjectURL(url);
+      };
+    }
+    setScanLoading(true);
+    var fd = new FormData();
+    fd.append('image', file, file.name || 'scan.jpg');
+    fd.append('channel', channel);
+    fetch(API_BASE + '/api/scan-ticket', { method: 'POST', body: fd })
+      .then(function (r) {
+        return r.json().then(function (j) {
+          if (!r.ok) throw new Error((j && j.error) || 'Scan lỗi ' + r.status);
+          return j;
+        });
+      })
+      .then(function (j) {
+        if (!j.success || !j.data) throw new Error((j && j.error) || 'Không đọc được vé');
+        applyScanResult(j.data);
+      })
+      .catch(function (err) {
+        toast(err.message || String(err));
+        setScanLoading(false);
+      })
+      .finally(function () {
+        var inp = document.getElementById('scan-file-input');
+        if (inp) inp.value = '';
+      });
+  }
+
+  function wireScan() {
+    var inp = document.getElementById('scan-file-input');
+    if (!inp || !document.getElementById('scan-overlay')) return;
+
+    function pick(useCamera) {
+      if (useCamera) inp.setAttribute('capture', 'environment');
+      else inp.removeAttribute('capture');
+      inp.click();
+    }
+
+    inp.addEventListener('change', function () {
+      var f = inp.files && inp.files[0];
+      if (f) uploadScanImage(f);
+    });
+
+    document.getElementById('scan-close').addEventListener('click', function () {
+      setScanOverlayOpen(false);
+    });
+    document.getElementById('scan-cancel').addEventListener('click', function () {
+      setScanOverlayOpen(false);
+    });
+    document.getElementById('scan-pick-camera').addEventListener('click', function () {
+      pick(true);
+    });
+    document.getElementById('scan-pick-gallery').addEventListener('click', function () {
+      pick(false);
+    });
+  }
+
   function fetchJSON(url) {
     return fetch(url).then(function (r) {
       if (!r.ok) throw new Error('Server lỗi: ' + r.status);
@@ -1291,8 +1484,10 @@
       render();
     });
     document.getElementById('nav-scan').addEventListener('click', function () {
-      toast('Tính năng đang được phát triển');
+      state.tab = 'do';
+      setScanOverlayOpen(true);
     });
+    wireScan();
     var panelDo = document.getElementById('panel-do');
     panelDo.addEventListener('click', function (e) {
       var t = findClickTarget(e.target, panelDo);
