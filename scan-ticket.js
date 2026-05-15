@@ -84,7 +84,7 @@ async function scanTicketFromImage(imageBuffer, channel, meta) {
 function getScanConfig() {
   return {
     ocr: scanOcr.getOcrConfig(),
-    vision: scanVision.getConfig(),
+    vision: scanVision.getPublicConfig(),
     visionFallback: visionFallbackEnabled(),
   };
 }

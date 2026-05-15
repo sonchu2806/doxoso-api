@@ -93,6 +93,20 @@ function getConfig() {
   };
 }
 
+/** Cấu hình public — không bao giờ trả apiKey. */
+function getPublicConfig() {
+  const cfg = getConfig();
+  return {
+    enabled: cfg.enabled,
+    model: cfg.model,
+    maxPerDay: cfg.maxPerDay,
+    maxPerIpPerDay: cfg.maxPerIpPerDay,
+    maxImageBytes: cfg.maxImageBytes,
+    maxTokens: cfg.maxTokens,
+    hasApiKey: !!cfg.apiKey,
+  };
+}
+
 function normDai(s) {
   return String(s || '')
     .toLowerCase()
@@ -496,14 +510,7 @@ function getUsageStats() {
 
   return {
     dayKey: mem.dayKey,
-    config: {
-      enabled: cfg.enabled,
-      model: cfg.model,
-      maxPerDay: cfg.maxPerDay,
-      maxPerIpPerDay: cfg.maxPerIpPerDay,
-      maxImageBytes: cfg.maxImageBytes,
-      hasApiKey: !!cfg.apiKey,
-    },
+    config: getPublicConfig(),
     today: {
       calls: mem.totalToday,
       remaining: Math.max(0, cfg.maxPerDay - mem.totalToday),
@@ -519,6 +526,7 @@ function getUsageStats() {
 
 module.exports = {
   getConfig,
+  getPublicConfig,
   checkQuota,
   scanTicketWithVision,
   scanTicketFromImage: scanTicketWithVision,
