@@ -271,7 +271,8 @@ app.post('/api/scan-ticket', scanUpload.single('image'), async (req, res) => {
   const channel = String(req.body?.channel || req.query?.channel || 'xskt')
     .toLowerCase()
     .trim();
-  const ch = channel === 'vietlott' ? 'vietlott' : 'xskt';
+  const ch =
+    channel === 'vietlott' ? 'vietlott' : channel === 'auto' ? 'auto' : 'xskt';
   if (!req.file || !req.file.buffer) {
     return res.status(400).json({ success: false, error: 'Thiếu file ảnh (field name: image).' });
   }

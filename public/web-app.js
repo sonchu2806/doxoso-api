@@ -284,6 +284,36 @@
   }
 
   var scanBusy = false;
+  var scanOpen = false;
+
+  function normalizeViDateString(s) {
+    var t = String(s || '').trim();
+    var slash = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (slash) {
+      return ('0' + slash[1]).slice(-2) + '/' + ('0' + slash[2]).slice(-2) + '/' + slash[3];
+    }
+    var iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return iso[3] + '/' + iso[2] + '/' + iso[1];
+    return t;
+  }
+
+  /** Khớp ngày đọc từ ảnh với option trong select (21 ngày gần nhất). */
+  function applyXsktDateFromScan(drawDate) {
+    var nd = normalizeViDateString(drawDate);
+    if (!nd) return;
+    var now = new Date();
+    var i;
+    for (i = 0; i < 21; i++) {
+      var d = new Date(now);
+      d.setDate(now.getDate() - i);
+      var text = d.toLocaleDateString('vi-VN');
+      if (text === nd || normalizeViDateString(text) === nd) {
+        state.xsktDate = text;
+        return;
+      }
+    }
+    state.xsktDate = nd;
+  }
 
   function findXsktRegionForDai(dai) {
     var d = String(dai || '').trim();
@@ -306,10 +336,14 @@
     var ov = document.getElementById('scan-overlay');
     var load = document.getElementById('scan-loading');
     var prev = document.getElementById('scan-preview');
+    var box = document.getElementById('scan-result-box');
+    var ns = document.getElementById('nav-scan');
+    scanOpen = !!open;
     if (!ov) return;
     if (open) {
       ov.classList.add('open');
       ov.setAttribute('aria-hidden', 'false');
+      if (ns) ns.classList.add('on');
     } else {
       ov.classList.remove('open');
       ov.setAttribute('aria-hidden', 'true');
@@ -319,32 +353,130 @@
         prev.classList.remove('show');
         prev.removeAttribute('src');
       }
+      if (box) {
+        box.classList.remove('show');
+        box.innerHTML = '';
+      }
+      if (ns) ns.classList.remove('on');
     }
   }
 
   function setScanLoading(on) {
     var load = document.getElementById('scan-loading');
     var acts = document.querySelector('#scan-overlay .scan-actions');
+    var box = document.getElementById('scan-result-box');
     if (load) load.classList.toggle('show', !!on);
     if (acts) acts.style.display = on ? 'none' : '';
+    if (on && box) {
+      box.classList.remove('show');
+      box.innerHTML = '';
+    }
     scanBusy = !!on;
   }
 
+  function showScanResultPreview(data) {
+    var box = document.getElementById('scan-result-box');
+    if (!box || !data) return;
+    var html = '';
+    if (data.type === 'xskt') {
+      html =
+        '<strong>Đã đọc vé XSKT</strong><br/>Đài: ' +
+        escapeHtml(data.dai || '—') +
+        '<br/>Ngày: ' +
+        escapeHtml(data.drawDate || '—') +
+        '<br/>Số vé: ' +
+        escapeHtml(data.ticketNumber || '—');
+    } else if (data.type === 'vietlott') {
+      html =
+        '<strong>Đã đọc vé Vietlott</strong><br/>Sản phẩm: ' +
+        escapeHtml(data.product || '—') +
+        '<br/>Số: ' +
+        escapeHtml((data.numbers || []).join(', '));
+    }
+    box.innerHTML = html;
+    box.classList.add('show');
+  }
+
+  function scrollToManualForm() {
+    requestAnimationFrame(function () {
+      var main = document.getElementById('main-scroll');
+      if (main) {
+        try {
+          main.scrollTo({ top: 0, behavior: 'smooth' });
+        } catch (e) {
+          main.scrollTop = 0;
+        }
+      }
+      var focusEl =
+        state.channel === 'xskt' ? document.getElementById('xskt-in') : document.querySelector('#panel-do .btn-check');
+      if (focusEl && typeof focusEl.scrollIntoView === 'function') {
+        try {
+          focusEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        } catch (e2) {
+          focusEl.scrollIntoView(true);
+        }
+      }
+    });
+  }
+
+  function prepareImageFile(file) {
+    return new Promise(function (resolve, reject) {
+      if (!file) return reject(new Error('Không có ảnh'));
+      var okType = /image\/(jpeg|png|webp|gif)/i.test(file.type || '');
+      if (okType && file.size > 0 && file.size < 900000) return resolve(file);
+      var img = new Image();
+      var url = URL.createObjectURL(file);
+      img.onload = function () {
+        var max = 1280;
+        var w = img.width;
+        var h = img.height;
+        if (w > max || h > max) {
+          if (w >= h) {
+            h = Math.round((h * max) / w);
+            w = max;
+          } else {
+            w = Math.round((w * max) / h);
+            h = max;
+          }
+        }
+        var canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        canvas.toBlob(
+          function (blob) {
+            URL.revokeObjectURL(url);
+            if (!blob) return reject(new Error('Không nén được ảnh'));
+            resolve(new File([blob], 'scan.jpg', { type: 'image/jpeg' }));
+          },
+          'image/jpeg',
+          0.88
+        );
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error('Không đọc được ảnh. Thử chụp lại hoặc chọn JPG/PNG.'));
+      };
+      img.src = url;
+    });
+  }
+
   function applyScanResult(data) {
-    if (!data) return;
+    if (!data) return false;
     if (data.type === 'xskt') {
       state.channel = 'xskt';
       state.tab = 'do';
       if (data.dai) state.xsktDai = data.dai;
       var reg = findXsktRegionForDai(state.xsktDai);
       if (reg) state.xsktRegion = reg;
-      if (data.drawDate) state.xsktDate = data.drawDate;
+      if (data.drawDate) applyXsktDateFromScan(data.drawDate);
       if (data.ticketNumber) state.xsktTicket = String(data.ticketNumber).replace(/\D/g, '');
       state.apiResult = state.checkResult = null;
       setScanOverlayOpen(false);
       render();
-      toast('Đã điền vé XSKT từ ảnh · bấm Dò kết quả để kiểm tra');
-      return;
+      scrollToManualForm();
+      toast('Đã điền vé XSKT · kiểm tra và bấm Dò kết quả');
+      return true;
     }
     if (data.type === 'vietlott') {
       state.channel = 'vietlott';
@@ -406,73 +538,89 @@
       loadKyList();
       setScanOverlayOpen(false);
       render();
-      toast('Đã điền Vietlott từ ảnh · bấm Dò kết quả');
+      scrollToManualForm();
+      toast('Đã điền Vietlott · kiểm tra và bấm Dò kết quả');
+      return true;
     }
+    toast('Không nhận diện được loại vé từ ảnh');
+    return false;
   }
 
   function uploadScanImage(file) {
     if (!file || scanBusy) return;
-    var channel = state.channel === 'vietlott' ? 'vietlott' : 'xskt';
-    var prev = document.getElementById('scan-preview');
-    if (prev) {
-      var url = URL.createObjectURL(file);
-      prev.src = url;
-      prev.classList.add('show');
-      prev.onload = function () {
-        URL.revokeObjectURL(url);
-      };
-    }
-    setScanLoading(true);
-    var fd = new FormData();
-    fd.append('image', file, file.name || 'scan.jpg');
-    fd.append('channel', channel);
-    fetch(API_BASE + '/api/scan-ticket', { method: 'POST', body: fd })
-      .then(function (r) {
-        return r.json().then(function (j) {
-          if (!r.ok) throw new Error((j && j.error) || 'Scan lỗi ' + r.status);
-          return j;
+    prepareImageFile(file)
+      .then(function (readyFile) {
+        var prev = document.getElementById('scan-preview');
+        if (prev) {
+          var url = URL.createObjectURL(readyFile);
+          prev.src = url;
+          prev.classList.add('show');
+          prev.onload = function () {
+            URL.revokeObjectURL(url);
+          };
+        }
+        setScanLoading(true);
+        var fd = new FormData();
+        fd.append('image', readyFile, readyFile.name || 'scan.jpg');
+        fd.append('channel', 'auto');
+        return fetch(API_BASE + '/api/scan-ticket', { method: 'POST', body: fd }).then(function (r) {
+          return r.text().then(function (text) {
+            var j = null;
+            try {
+              j = text ? JSON.parse(text) : null;
+            } catch (parseErr) {
+              throw new Error('Phản hồi server không hợp lệ');
+            }
+            if (!r.ok) throw new Error((j && j.error) || 'Scan lỗi ' + r.status);
+            return j;
+          });
         });
       })
       .then(function (j) {
-        if (!j.success || !j.data) throw new Error((j && j.error) || 'Không đọc được vé');
+        if (!j || !j.success || !j.data) throw new Error((j && j.error) || 'Không đọc được vé');
+        showScanResultPreview(j.data);
         applyScanResult(j.data);
       })
       .catch(function (err) {
         toast(err.message || String(err));
-        setScanLoading(false);
       })
       .finally(function () {
-        var inp = document.getElementById('scan-file-input');
-        if (inp) inp.value = '';
+        setScanLoading(false);
+        var cam = document.getElementById('scan-file-camera');
+        var gal = document.getElementById('scan-file-gallery');
+        if (cam) cam.value = '';
+        if (gal) gal.value = '';
       });
   }
 
   function wireScan() {
-    var inp = document.getElementById('scan-file-input');
-    if (!inp || !document.getElementById('scan-overlay')) return;
+    var cam = document.getElementById('scan-file-camera');
+    var gal = document.getElementById('scan-file-gallery');
+    if ((!cam && !gal) || !document.getElementById('scan-overlay')) return;
 
-    function pick(useCamera) {
-      if (useCamera) inp.setAttribute('capture', 'environment');
-      else inp.removeAttribute('capture');
-      inp.click();
+    function bindInput(inp) {
+      if (!inp) return;
+      inp.addEventListener('change', function () {
+        var f = inp.files && inp.files[0];
+        if (f) uploadScanImage(f);
+      });
     }
+    bindInput(cam);
+    bindInput(gal);
 
-    inp.addEventListener('change', function () {
-      var f = inp.files && inp.files[0];
-      if (f) uploadScanImage(f);
-    });
-
-    document.getElementById('scan-close').addEventListener('click', function () {
-      setScanOverlayOpen(false);
-    });
-    document.getElementById('scan-cancel').addEventListener('click', function () {
-      setScanOverlayOpen(false);
-    });
     document.getElementById('scan-pick-camera').addEventListener('click', function () {
-      pick(true);
+      if (scanBusy) return;
+      if (cam) {
+        cam.value = '';
+        cam.click();
+      }
     });
     document.getElementById('scan-pick-gallery').addEventListener('click', function () {
-      pick(false);
+      if (scanBusy) return;
+      if (gal) {
+        gal.value = '';
+        gal.click();
+      }
     });
   }
 
@@ -1473,19 +1621,22 @@
       });
     });
     document.getElementById('nav-vl').addEventListener('click', function () {
+      setScanOverlayOpen(false);
       state.channel = 'vietlott';
       state.tab = 'do';
       loadKyList();
       render();
     });
     document.getElementById('nav-xskt').addEventListener('click', function () {
+      setScanOverlayOpen(false);
       state.channel = 'xskt';
       state.tab = 'do';
       render();
     });
     document.getElementById('nav-scan').addEventListener('click', function () {
       state.tab = 'do';
-      setScanOverlayOpen(true);
+      if (scanOpen) setScanOverlayOpen(false);
+      else setScanOverlayOpen(true);
     });
     wireScan();
     var panelDo = document.getElementById('panel-do');

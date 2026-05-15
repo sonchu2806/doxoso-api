@@ -215,6 +215,19 @@ function postProcessParsed(obj, channel) {
 
 function buildPrompt(channel) {
   const daiHint = DAI_LIST.slice(0, 20).join(', ') + ', …';
+  if (channel === 'auto') {
+    return (
+      'Bạn đọc ảnh vé số Việt Nam. Xác định vé là XSKT (kiến thiết) hay Vietlott. ' +
+      'Trả DUY NHẤT một JSON hợp lệ, không markdown, không giải thích.\n' +
+      'Nếu XSKT:\n' +
+      '{"type":"xskt","dai":"tên đài","drawDate":"dd/mm/yyyy","ticketNumber":"5 hoặc 6 chữ số vé"}\n' +
+      'Nếu Vietlott:\n' +
+      '{"type":"vietlott","product":"mega|power|keno|max3d|max3dpro|lotto535","numbers":[...],"drawDate":"dd/mm/yyyy hoặc rỗng"}\n' +
+      'dai XSKT gợi ý: ' +
+      daiHint +
+      '. ticketNumber là dãy số vé in trên vé, không lấy ngày làm mã vé.'
+    );
+  }
   if (channel === 'vietlott') {
     return (
       'Bạn đọc ảnh vé số Vietlott (Mega, Power, Keno, Max3D, Lotto). ' +
@@ -350,7 +363,8 @@ async function callAnthropicVision(imageBase64, mediaType, channel) {
  */
 async function scanTicketFromImage(imageBuffer, channel, meta) {
   meta = meta || {};
-  const ch = channel === 'vietlott' ? 'vietlott' : 'xskt';
+  const rawCh = String(channel || 'auto').toLowerCase().trim();
+  const ch = rawCh === 'vietlott' ? 'vietlott' : rawCh === 'auto' ? 'auto' : 'xskt';
   const quota = checkQuota(meta.clientIp);
   if (!quota.ok) {
     return { success: false, status: quota.status, error: quota.error };
@@ -398,7 +412,7 @@ async function scanTicketFromImage(imageBuffer, channel, meta) {
       };
     }
 
-    const parsed = postProcessParsed(rawObj, ch);
+    const parsed = postProcessParsed(rawObj, ch === 'auto' ? String(rawObj.type || 'xskt') : ch);
     if (parsed.type === 'unknown') {
       recordQuota(quota.ip);
       pushLog({
