@@ -361,7 +361,7 @@ async function callAnthropicVision(imageBase64, mediaType, channel) {
  * @param {string} channel - xskt | vietlott
  * @param {{ clientIp?: string, userAgent?: string }} meta
  */
-async function scanTicketFromImage(imageBuffer, channel, meta) {
+async function scanTicketWithVision(imageBuffer, channel, meta) {
   meta = meta || {};
   const rawCh = String(channel || 'auto').toLowerCase().trim();
   const ch = rawCh === 'vietlott' ? 'vietlott' : rawCh === 'auto' ? 'auto' : 'xskt';
@@ -395,6 +395,7 @@ async function scanTicketFromImage(imageBuffer, channel, meta) {
         at: new Date().toISOString(),
         ip: quota.ip,
         channel: ch,
+        engine: 'claude-vision',
         success: false,
         model: cfg.model,
         promptTokens: api.promptTokens,
@@ -419,6 +420,7 @@ async function scanTicketFromImage(imageBuffer, channel, meta) {
         at: new Date().toISOString(),
         ip: quota.ip,
         channel: ch,
+        engine: 'claude-vision',
         success: false,
         model: cfg.model,
         promptTokens: api.promptTokens,
@@ -440,6 +442,7 @@ async function scanTicketFromImage(imageBuffer, channel, meta) {
       at: new Date().toISOString(),
       ip: quota.ip,
       channel: ch,
+      engine: 'claude-vision',
       success: true,
       model: cfg.model,
       promptTokens: api.promptTokens,
@@ -470,6 +473,7 @@ async function scanTicketFromImage(imageBuffer, channel, meta) {
       at: new Date().toISOString(),
       ip: quota.ip,
       channel: ch,
+      engine: 'claude-vision',
       success: false,
       model: cfg.model,
       ms: Date.now() - started,
@@ -487,6 +491,8 @@ function getUsageStats() {
   const tokensToday = todayLogs.reduce((s, l) => s + (l.totalTokens || 0), 0);
   const usdToday = todayLogs.reduce((s, l) => s + (l.estimatedUsd || 0), 0);
   const okToday = todayLogs.filter((l) => l.success).length;
+  const ocrToday = todayLogs.filter((l) => l.engine === 'tesseract' && l.success).length;
+  const visionToday = todayLogs.filter((l) => l.engine === 'claude-vision' && l.success).length;
 
   return {
     dayKey: mem.dayKey,
@@ -502,6 +508,8 @@ function getUsageStats() {
       calls: mem.totalToday,
       remaining: Math.max(0, cfg.maxPerDay - mem.totalToday),
       successCount: okToday,
+      ocrSuccessCount: ocrToday,
+      visionSuccessCount: visionToday,
       totalTokens: tokensToday,
       estimatedUsd: Math.round(usdToday * 10000) / 10000,
     },
@@ -512,8 +520,11 @@ function getUsageStats() {
 module.exports = {
   getConfig,
   checkQuota,
-  scanTicketFromImage,
+  scanTicketWithVision,
+  scanTicketFromImage: scanTicketWithVision,
+  pushScanLog: pushLog,
   getUsageStats,
   matchDai,
   normalizeDrawDateVi,
+  postProcessParsed,
 };

@@ -461,8 +461,17 @@
     });
   }
 
-  function applyScanResult(data) {
+  function scanSourceLabel(meta) {
+    if (!meta || !meta.source) return '';
+    if (meta.source === 'tesseract') return ' (OCR)';
+    if (meta.source === 'claude-vision') return meta.fallbackFromOcr ? ' (AI fallback)' : ' (AI)';
+    return '';
+  }
+
+  function applyScanResult(data, meta) {
+    meta = meta || {};
     if (!data) return false;
+    var srcLbl = scanSourceLabel(meta);
     if (data.type === 'xskt') {
       state.channel = 'xskt';
       state.tab = 'do';
@@ -475,7 +484,7 @@
       setScanOverlayOpen(false);
       render();
       scrollToManualForm();
-      toast('Đã điền vé XSKT · kiểm tra và bấm Dò kết quả');
+      toast('Đã điền vé XSKT' + srcLbl + ' · kiểm tra và bấm Dò kết quả');
       return true;
     }
     if (data.type === 'vietlott') {
@@ -539,7 +548,7 @@
       setScanOverlayOpen(false);
       render();
       scrollToManualForm();
-      toast('Đã điền Vietlott · kiểm tra và bấm Dò kết quả');
+      toast('Đã điền Vietlott' + srcLbl + ' · kiểm tra và bấm Dò kết quả');
       return true;
     }
     toast('Không nhận diện được loại vé từ ảnh');
@@ -579,7 +588,10 @@
       .then(function (j) {
         if (!j || !j.success || !j.data) throw new Error((j && j.error) || 'Không đọc được vé');
         showScanResultPreview(j.data);
-        applyScanResult(j.data);
+        applyScanResult(j.data, {
+          source: j.source,
+          fallbackFromOcr: j.fallbackFromOcr,
+        });
       })
       .catch(function (err) {
         toast(err.message || String(err));

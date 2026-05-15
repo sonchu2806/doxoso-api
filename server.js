@@ -22,7 +22,7 @@ app.use(express.json());
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 
-const scanVision = require('./scan-vision');
+const scanTicket = require('./scan-ticket');
 const vs = require('./vietlott-scrape');
 
 const scanUpload = multer({
@@ -266,7 +266,7 @@ app.get('/xskt', async (req, res) => {
 });
 
 /** Đếm dòng + vài mẫu để biết dữ liệu đã vào Supabase chưa (cần env + quyền SELECT trên bảng). */
-/** Đọc vé từ ảnh (Claude Vision). multipart field `image`, body/query `channel=xskt|vietlott`. */
+/** Đọc vé từ ảnh: Tesseract OCR trước, Claude Vision fallback. multipart `image`, channel=auto|xskt|vietlott */
 app.post('/api/scan-ticket', scanUpload.single('image'), async (req, res) => {
   const channel = String(req.body?.channel || req.query?.channel || 'xskt')
     .toLowerCase()
@@ -277,7 +277,7 @@ app.post('/api/scan-ticket', scanUpload.single('image'), async (req, res) => {
     return res.status(400).json({ success: false, error: 'Thiếu file ảnh (field name: image).' });
   }
   try {
-    const out = await scanVision.scanTicketFromImage(req.file.buffer, ch, {
+    const out = await scanTicket.scanTicketFromImage(req.file.buffer, ch, {
       clientIp: clientIpFromReq(req),
       userAgent: String(req.headers['user-agent'] || '').slice(0, 200),
     });
@@ -293,7 +293,7 @@ app.post('/api/scan-ticket', scanUpload.single('image'), async (req, res) => {
 
 /** Thống kê lượt scan / token (bộ nhớ server — reset khi restart). */
 app.get('/admin/scan-usage', (_req, res) => {
-  res.json({ success: true, ...scanVision.getUsageStats() });
+  res.json({ success: true, scan: scanTicket.getScanConfig(), ...scanTicket.getUsageStats() });
 });
 
 app.get('/admin/supabase-status', async (req, res) => {
