@@ -572,7 +572,8 @@
         var fd = new FormData();
         fd.append('image', readyFile, readyFile.name || 'scan.jpg');
         fd.append('channel', 'auto');
-        return fetch(API_BASE + '/api/scan-ticket', { method: 'POST', body: fd }).then(function (r) {
+        var scanUrl = API_BASE + '/api/scan-ticket?_=' + Date.now();
+        return fetch(scanUrl, { method: 'POST', body: fd, cache: 'no-store' }).then(function (r) {
           return r.text().then(function (text) {
             var j = null;
             try {
