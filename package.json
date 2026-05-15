@@ -8,6 +8,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "sync": "node sync.js",
     "sync-history": "node sync-history.js",
+    "sync-xskt-history": "node sync-xskt-history.js",
     "local-bridge": "node scripts/local-vietlott-bridge.js"
   },
   "keywords": [],
