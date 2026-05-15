@@ -85,7 +85,7 @@ function getConfig() {
   return {
     enabled: process.env.SCAN_VISION_ENABLED === '1' || process.env.SCAN_VISION_ENABLED === 'true',
     apiKey: String(process.env.ANTHROPIC_API_KEY || '').trim(),
-    model: String(process.env.SCAN_VISION_MODEL || 'claude-sonnet-4-20250514').trim(),
+    model: String(process.env.SCAN_VISION_MODEL || 'claude-sonnet-4-6').trim(),
     maxPerDay: envInt('SCAN_VISION_MAX_PER_DAY', 200),
     maxPerIpPerDay: envInt('SCAN_VISION_MAX_PER_IP_PER_DAY', 20),
     maxImageBytes: envInt('SCAN_VISION_MAX_IMAGE_BYTES', 1500000),
@@ -314,60 +314,100 @@ function recordQuota(ip) {
   mem.byIp[ip] = (mem.byIp[ip] || 0) + 1;
 }
 
+function visionModelCandidates(preferred) {
+  const list = [
+    preferred,
+    'claude-sonnet-4-6',
+    'claude-sonnet-4-20250514',
+    'claude-3-5-sonnet-20241022',
+    'claude-3-5-haiku-20241022',
+  ];
+  const out = [];
+  for (const m of list) {
+    const t = String(m || '').trim();
+    if (t && out.indexOf(t) === -1) out.push(t);
+  }
+  return out;
+}
+
+function isModelNotFoundError(e) {
+  const msg = String(
+    (e.response && e.response.data && e.response.data.error && e.response.data.error.message) ||
+      e.message ||
+      ''
+  ).toLowerCase();
+  const status = e.response && e.response.status;
+  return status === 404 || msg.includes('model') || msg.includes('not_found');
+}
+
 async function callAnthropicVision(imageBase64, mediaType, channel) {
   const cfg = getConfig();
-  const res = await axios.post(
-    'https://api.anthropic.com/v1/messages',
-    {
-      model: cfg.model,
-      max_tokens: cfg.maxTokens,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: mediaType,
-                data: imageBase64,
-              },
+  const body = {
+    max_tokens: cfg.maxTokens,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: mediaType,
+              data: imageBase64,
             },
-            {
-              type: 'text',
-              text: buildPrompt(channel),
-            },
-          ],
-        },
-      ],
-    },
-    {
-      headers: {
-        'x-api-key': cfg.apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
+          },
+          {
+            type: 'text',
+            text: buildPrompt(channel),
+          },
+        ],
       },
-      timeout: 90000,
-    }
-  );
+    ],
+  };
+  const headers = {
+    'x-api-key': cfg.apiKey,
+    'anthropic-version': '2023-06-01',
+    'content-type': 'application/json',
+  };
 
-  const usage = res.data && res.data.usage ? res.data.usage : {};
-  const promptTokens = usage.input_tokens || 0;
-  const completionTokens = usage.output_tokens || 0;
-  let text = '';
-  const content = res.data && res.data.content;
-  if (Array.isArray(content)) {
-    for (const block of content) {
-      if (block && block.type === 'text' && block.text) text += block.text;
+  let lastErr = null;
+  const models = visionModelCandidates(cfg.model);
+  for (let i = 0; i < models.length; i++) {
+    const model = models[i];
+    try {
+      const res = await axios.post(
+        'https://api.anthropic.com/v1/messages',
+        { ...body, model },
+        { headers, timeout: 90000 }
+      );
+      const usage = res.data && res.data.usage ? res.data.usage : {};
+      const promptTokens = usage.input_tokens || 0;
+      const completionTokens = usage.output_tokens || 0;
+      let text = '';
+      const content = res.data && res.data.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block && block.type === 'text' && block.text) text += block.text;
+        }
+      }
+      return {
+        text,
+        model,
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+        estimatedUsd: estimateUsd(promptTokens, completionTokens),
+      };
+    } catch (e) {
+      lastErr = e;
+      if (isModelNotFoundError(e) && i < models.length - 1) {
+        console.warn('[scan-vision] model failed, retry:', model);
+        continue;
+      }
+      throw e;
     }
   }
-  return {
-    text,
-    promptTokens,
-    completionTokens,
-    totalTokens: promptTokens + completionTokens,
-    estimatedUsd: estimateUsd(promptTokens, completionTokens),
-  };
+  throw lastErr || new Error('Không gọi được Claude Vision');
 }
 
 /**
@@ -411,7 +451,7 @@ async function scanTicketWithVision(imageBuffer, channel, meta) {
         channel: ch,
         engine: 'claude-vision',
         success: false,
-        model: cfg.model,
+        model: api.model || cfg.model,
         promptTokens: api.promptTokens,
         completionTokens: api.completionTokens,
         totalTokens: api.totalTokens,
@@ -436,7 +476,7 @@ async function scanTicketWithVision(imageBuffer, channel, meta) {
         channel: ch,
         engine: 'claude-vision',
         success: false,
-        model: cfg.model,
+        model: api.model || cfg.model,
         promptTokens: api.promptTokens,
         completionTokens: api.completionTokens,
         totalTokens: api.totalTokens,
