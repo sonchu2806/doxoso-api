@@ -135,7 +135,7 @@ async function scrapeXSKT(dai, dateStr, region, opts) {
 
   async function finishAndSave(data, scrapedKey) {
     const row = Object.assign({}, data, { dai: canonicalDai });
-    await saveXSKTToSupabase(canonicalDai, data.drawDate || drawDateKey, data);
+    await saveXSKTToSupabase(canonicalDai, drawDateKey, data);
     return row;
   }
 

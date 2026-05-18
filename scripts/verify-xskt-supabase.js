@@ -32,13 +32,21 @@ async function main() {
     if (row.draw_date) dates.add(row.draw_date);
   }
   const sorted = Array.from(dates).sort();
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const future = sorted.filter((d) => d > todayIso);
   console.log('Tổng dòng (count):', countRes.count);
-  console.log('Mẫu lấy:', (data || []).length, 'dòng');
+  console.log('Mẫu lấy:', (data || []).length, 'dòng (order draw_date DESC, tối đa 5000)');
   console.log('Số ngày distinct (trong mẫu):', dates.size);
-  console.log('Ngày mới nhất:', sorted.slice(0, 5).join(', ') || '—');
-  console.log('Ngày cũ nhất (trong mẫu):', sorted.slice(-5).join(', ') || '—');
-  if (dates.size <= 3 && (countRes.count || 0) > 50) {
-    console.log('\n⚠ Có thể backfill cũ ghi sai ngày (nhiều dòng nhưng ít ngày). Chạy lại: node sync-xskt-history.js 60');
+  console.log('Ngày cũ nhất (trong mẫu):', sorted.slice(0, 5).join(', ') || '—');
+  console.log('Ngày mới nhất (trong mẫu):', sorted.slice(-5).join(', ') || '—');
+  if (future.length) {
+    console.log(
+      '\n⚠ Có',
+      future.length,
+      'ngày > hôm nay (' + todayIso + ') — backfill cũ có thể ghi sai draw_date. Chạy lại: node sync-xskt-history.js 60'
+    );
+  } else if (dates.size <= 3 && (countRes.count || 0) > 50) {
+    console.log('\n⚠ Nhiều dòng nhưng ít ngày distinct — có thể sai ngày. Chạy lại: node sync-xskt-history.js 60');
   }
 }
 

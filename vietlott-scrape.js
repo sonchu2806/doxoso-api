@@ -605,13 +605,16 @@ async function fetchHTML(url) {
       const html = await vietlottGetHtml(u, { timeout: 10000 });
       return html;
     }
+    const timeoutMs = u.includes('minhngoc.net.vn')
+      ? Math.max(10000, parseInt(process.env.MINHNGOC_FETCH_TIMEOUT_MS || '25000', 10))
+      : 10000;
     const { data } = await axios.get(u, {
       headers: {
         'User-Agent': VIETLOTT_UA,
         Accept: 'text/html',
         'Accept-Language': 'vi-VN,vi;q=0.9',
       },
-      timeout: 10000,
+      timeout: timeoutMs,
     });
     return data;
   } catch (e) {
@@ -1283,6 +1286,10 @@ async function saveXSKTToSupabase(dai, drawDate, data) {
     if (!viDate) {
       console.error('[supabase] xskt skip — draw_date không hợp lệ:', dai, drawDate);
       return false;
+    }
+    for (const alias of xsktDaiLookupNames(dai)) {
+      if (alias === canonicalDai) continue;
+      await supabase.from('xskt_results').delete().eq('dai', alias).eq('draw_date', viDate);
     }
     const { error } = await supabase.from('xskt_results').upsert(
       {
@@ -1956,6 +1963,52 @@ const XSKT_REGIONS = {
   ],
 };
 
+/** Lịch quay theo thứ (0=CN … 6=T7) — khớp public/web-app.js */
+const XSKT_DRAW_SCHEDULE = {
+  mb: { 1: ['Hà Nội'], 2: ['Quảng Ninh'], 3: ['Bắc Ninh'], 4: ['Hà Nội'], 5: ['Hải Phòng'], 6: ['Nam Định'], 0: ['Thái Bình'] },
+  mn: {
+    1: ['TP. Hồ Chí Minh', 'Đồng Tháp', 'Cà Mau'],
+    2: ['Bến Tre', 'Vũng Tàu', 'Bạc Liêu'],
+    3: ['Đồng Nai', 'Cần Thơ', 'Sóc Trăng'],
+    4: ['Tây Ninh', 'An Giang', 'Bình Thuận'],
+    5: ['Vĩnh Long', 'Bình Dương', 'Trà Vinh'],
+    6: ['TP. Hồ Chí Minh', 'Long An', 'Bình Phước', 'Hậu Giang'],
+    0: ['Tiền Giang', 'Kiên Giang', 'Đà Lạt'],
+  },
+  mt: {
+    1: ['Thừa Thiên Huế', 'Phú Yên'],
+    2: ['Đắk Lắk', 'Quảng Nam'],
+    3: ['Đà Nẵng', 'Khánh Hòa'],
+    4: ['Bình Định', 'Quảng Trị', 'Quảng Bình'],
+    5: ['Gia Lai', 'Ninh Thuận'],
+    6: ['Đà Nẵng', 'Quảng Ngãi', 'Đắk Nông'],
+    0: ['Kon Tum', 'Khánh Hòa', 'Thừa Thiên Huế'],
+  },
+};
+
+function viDrawDateToLocalDate(drawDate) {
+  const iso = normalizeDrawDateForSupabase(drawDate);
+  if (!iso) return null;
+  const parts = iso.split('-').map((x) => parseInt(x, 10));
+  if (parts.length !== 3 || parts.some((n) => Number.isNaN(n))) return null;
+  return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
+/** Đài có quay đúng thứ trong tuần không (tránh ghi TP.HCM từ block 11/5 lên ngày khác). */
+function xsktDaiScheduledOnDrawDate(region, dai, drawDate) {
+  if (isMienBacDaiQuery(dai) || normProvince(dai) === normProvince(XSKT_MIEN_BAC_LABEL)) {
+    return region === 'mb';
+  }
+  const dt = viDrawDateToLocalDate(drawDate);
+  if (!dt) return true;
+  const sched = XSKT_DRAW_SCHEDULE[region];
+  if (!sched) return true;
+  const dayList = sched[dt.getDay()];
+  if (!dayList || !dayList.length) return false;
+  const n = normProvince(resolveCanonicalXsktDai(dai));
+  return dayList.some((name) => normProvince(name) === n);
+}
+
 function normProvince(s) {
   return String(s || '')
     .toLowerCase()
@@ -1981,7 +2034,8 @@ function listAllXsktDaiNames() {
   const out = new Set();
   out.add(XSKT_MIEN_BAC_LABEL);
   for (const region of ['mb', 'mt', 'mn']) {
-    const sched = XSKT_REGIONS[region];
+    (XSKT_REGIONS[region] || []).forEach((d) => out.add(d));
+    const sched = XSKT_DRAW_SCHEDULE[region];
     if (!sched) continue;
     for (const key of Object.keys(sched)) {
       const arr = sched[key];
@@ -1989,6 +2043,22 @@ function listAllXsktDaiNames() {
     }
   }
   return [...out];
+}
+
+/** Chỉ giữ đài có drawDate khớp ngày URL (sau parse nhiều block trên cùng trang). */
+function filterXsktResultsByRequestedDate(results, dateStr) {
+  if (!results || typeof results !== 'object' || !dateStr) return results;
+  const wantedVi = minhNgocSlugToViDateEarly(dateStr) || minhNgocSlugToViDate(dateStr);
+  const wantedIso = wantedVi ? normalizeDrawDateForSupabase(wantedVi) : '';
+  if (!wantedIso) return results;
+  const out = {};
+  for (const [dai, row] of Object.entries(results)) {
+    if (!row || typeof row !== 'object') continue;
+    const rowIso = normalizeDrawDateForSupabase(row.drawDate);
+    if (!rowIso || rowIso !== wantedIso) continue;
+    out[dai] = Object.assign({}, row, { drawDate: wantedVi });
+  }
+  return out;
 }
 
 /** Tên đài chuẩn trong lịch app (VD TP. Hồ Chí Minh, không lệch TP.HCM trên Minh Ngọc). */
@@ -2130,16 +2200,19 @@ function parseAllXSKTByCheerio(html, urlSlug) {
 
   $(MINH_NGOC_XSKT_TABLE_SEL).each((_, tableEl) => {
     const $table = $(tableEl);
+    const tableVi = extractMinhNgocDrawDateFromTable($, $table);
+    const tableIso = tableVi ? normalizeDrawDateForSupabase(tableVi) : '';
     if (wantedIso) {
-      const tableVi = extractMinhNgocDrawDateFromTable($, $table);
-      const tableIso = tableVi ? normalizeDrawDateForSupabase(tableVi) : '';
-      if (tableIso && tableIso !== wantedIso) return;
+      if (!tableIso || tableIso !== wantedIso) return;
     }
-    const tableDrawDate =
-      extractMinhNgocDrawDateFromTable($, $table) || drawDateFromHtml || wantedVi || '';
+    const tableDrawDate = tableVi || drawDateFromHtml || wantedVi || '';
 
     $table.find('td.tinh').each((__, tinhEl) => {
-      const daiName = ($(tinhEl).text() || '')
+      const $tinh = $(tinhEl);
+      const $innerTable = $tinh.closest('table');
+      if (!$innerTable.length || $innerTable[0] === $table[0]) return;
+
+      const daiName = ($tinh.text() || '')
         .trim()
         .split('\n')
         .map((s) => s.trim())
@@ -2148,24 +2221,23 @@ function parseAllXSKTByCheerio(html, urlSlug) {
 
       const prizes = [];
       let specialPrize = '';
-      const cells = $(tinhEl).closest('tr').find('td').toArray();
-      const startIdx = cells.indexOf(tinhEl);
-      if (startIdx < 0) return;
-
-      for (let i = startIdx + 1; i < cells.length; i++) {
-        const $c = $(cells[i]);
+      $innerTable.find('td[class*="giai"]').each((___, cellEl) => {
+        const $c = $(cellEl);
         const cls = String($c.attr('class') || '').toLowerCase();
-        if (cls.includes('tinh')) break;
-        if (!/(giaidb|giai\d)/.test(cls)) continue;
+        if (!/(giaidb|giai\d)/.test(cls) || cls.includes('giai_tinh') || cls.includes('giai_text')) {
+          return;
+        }
         const nums = extractNumbers($c);
-        if (nums.length === 0) continue;
+        if (nums.length === 0) return;
         const prizeLabel = normalizePrizeLabel($c.text(), cls);
         prizes.push({ label: prizeLabel, numbers: nums });
         if (prizeLabel === 'Giải đặc biệt' && nums[0]) specialPrize = nums[0];
-      }
+      });
 
       if (prizes.length === 0) return;
-      allResults[daiName] = {
+      const rowIso = normalizeDrawDateForSupabase(tableDrawDate);
+      if (wantedIso && rowIso && rowIso !== wantedIso) return;
+      const entry = {
         specialPrize:
           specialPrize ||
           prizes.find((p) => p.label === 'Giải đặc biệt')?.numbers?.[0] ||
@@ -2173,10 +2245,19 @@ function parseAllXSKTByCheerio(html, urlSlug) {
         prizes,
         drawDate: tableDrawDate,
       };
+      const prev = allResults[daiName];
+      if (prev && wantedIso) {
+        const prevIso = normalizeDrawDateForSupabase(prev.drawDate);
+        if (prevIso === wantedIso && rowIso !== wantedIso) return;
+        if (prevIso !== wantedIso && rowIso !== wantedIso) return;
+      }
+      allResults[daiName] = entry;
     });
   });
 
-  if (Object.keys(allResults).length > 0) return allResults;
+  if (Object.keys(allResults).length > 0) {
+    return filterXsktResultsByRequestedDate(allResults, urlSlug);
+  }
 
   $('table.bangketquaSo').each((_, tableEl) => {
     const $table = $(tableEl);
@@ -2348,7 +2429,8 @@ async function scrapeAllXSKT(dateStr, region = 'mn') {
       raw = parseMienBacMinhNgocByCheerio(html);
     }
     if (Object.keys(raw).length > 0) {
-      const quickResults = safeRegion === 'mb' ? normalizeMienBacXsktMap(raw) : raw;
+      let quickResults = safeRegion === 'mb' ? normalizeMienBacXsktMap(raw) : raw;
+      quickResults = filterXsktResultsByRequestedDate(quickResults, dateStr);
       stampXsktResultsDrawDate(quickResults, dateStr);
       console.log('[XSKT all] using axios+cheerio, tìm được', Object.keys(quickResults).length, 'đài');
       setCache(cacheKey, quickResults);
@@ -2362,148 +2444,15 @@ async function scrapeAllXSKT(dateStr, region = 'mn') {
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
     await new Promise(r => setTimeout(r, 5000));
 
-    const results = await page.evaluate(() => {
-      const MB_LABEL = 'Miền Bắc';
-      const parseMbFirstBox = () => {
-        const firstBox = document.querySelector('.box_kqxs');
-        if (!firstBox || !firstBox.querySelector('td.giaidb')) return null;
-
-        const dateRe = /(\d{2}\/\d{2}\/\d{4})/;
-        let drawDate = '';
-        for (const a of firstBox.querySelectorAll('.title a')) {
-          const m = ((a.textContent || '').trim()).match(dateRe);
-          if (m) {
-            drawDate = m[1];
-            break;
-          }
-        }
-        if (!drawDate) {
-          const m = (firstBox.textContent || '').match(dateRe);
-          drawDate = m ? m[1] : (() => {
-            const d = new Date();
-            return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + d.getFullYear();
-          })();
-        }
-
-        const rowDefs = [
-          ['giaidb', 'Giải đặc biệt'],
-          ['giai1', 'Giải nhất'],
-          ['giai2', 'Giải nhì'],
-          ['giai3', 'Giải ba'],
-          ['giai4', 'Giải tư'],
-          ['giai5', 'Giải năm'],
-          ['giai6', 'Giải sáu'],
-          ['giai7', 'Giải bảy'],
-        ];
-        const prizes = [];
-        let specialPrize = '';
-        for (const [cls, label] of rowDefs) {
-          const cell = firstBox.querySelector(`td.${cls}`);
-          if (!cell) continue;
-          const nums = Array.from(cell.querySelectorAll('div'))
-            .map((d) => (d.textContent || '').trim().replace(/\D/g, ''))
-            .filter((n) => n.length >= 2);
-          if (nums.length === 0) continue;
-          prizes.push({ label, numbers: nums });
-          if (label === 'Giải đặc biệt' && nums[0]) specialPrize = nums[0];
-        }
-        if (prizes.length === 0) return null;
-        const sp =
-          specialPrize ||
-          (prizes.find((p) => p.label === 'Giải đặc biệt')?.numbers?.[0] || '');
-        return { [MB_LABEL]: { specialPrize: sp, prizes, drawDate } };
-      };
-
-      const mbFirst = parseMbFirstBox();
-      if (mbFirst) return mbFirst;
-
-      const normalizePrizeLabel = (raw, cls = '') => {
-        const text = String(raw || '').trim().toLowerCase();
-        if (text.includes('đặc biệt') || cls.includes('giaidb')) return 'Giải đặc biệt';
-        if (text.includes('giải nhất') || text === 'g1' || cls.includes('giai1')) return 'Giải nhất';
-        if (text.includes('giải nhì') || text === 'g2' || cls.includes('giai2')) return 'Giải nhì';
-        if (text.includes('giải ba') || text === 'g3' || cls.includes('giai3')) return 'Giải ba';
-        if (text.includes('giải tư') || text === 'g4' || cls.includes('giai4')) return 'Giải tư';
-        if (text.includes('giải năm') || text === 'g5' || cls.includes('giai5')) return 'Giải năm';
-        if (text.includes('giải sáu') || text === 'g6' || cls.includes('giai6')) return 'Giải sáu';
-        if (text.includes('giải bảy') || text === 'g7' || cls.includes('giai7')) return 'Giải bảy';
-        if (text.includes('giải tám') || text === 'g8' || cls.includes('giai8')) return 'Giải tám';
-        return String(raw || '').trim() || 'Giải';
-      };
-
-      const extractNumbers = (cell) => {
-        const byNode = Array.from(cell.querySelectorAll('div.giaiSo, span.giaiSo, b, strong'))
-          .map((el) => (el.textContent || '').trim().replace(/\D/g, ''))
-          .filter((n) => n.length >= 2);
-        if (byNode.length > 0) return byNode;
-        const fallback = (cell.textContent || '')
-          .split(/\s+/)
-          .map((x) => x.replace(/\D/g, ''))
-          .filter((n) => n.length >= 2);
-        return fallback;
-      };
-
-      const allResults = {};
-      document.querySelectorAll('table.bangketquaSo').forEach(table => {
-        const provinceNames = Array.from(table.querySelectorAll('td.tinh'))
-          .map((el) => (el.textContent || '').trim())
-          .filter(Boolean);
-        if (provinceNames.length === 0) return;
-
-        const provincePrizes = provinceNames.map(() => []);
-        const specialByProvince = provinceNames.map(() => '');
-
-        Array.from(table.querySelectorAll('tr')).forEach((row) => {
-          const className = String(row.className || '').toLowerCase();
-          const labelCell = row.querySelector('td.giai, td:first-child');
-          const rawLabel = labelCell ? (labelCell.textContent || '').trim() : '';
-          const prizeCells = Array.from(row.querySelectorAll('td[class*="giai"]')).filter((cell) => {
-            const cls = String(cell.className || '').toLowerCase();
-            return cls.includes('giai') && !cls.includes('giai_tinh') && !cls.includes('giai_text');
-          });
-          if (prizeCells.length < provinceNames.length) return;
-
-          const prizeLabel = normalizePrizeLabel(rawLabel, className + ' ' + String(prizeCells[0].className || '').toLowerCase());
-          for (let i = 0; i < provinceNames.length; i++) {
-            const nums = extractNumbers(prizeCells[i]);
-            if (nums.length === 0) continue;
-            provincePrizes[i].push({ label: prizeLabel, numbers: nums });
-            if (prizeLabel === 'Giải đặc biệt' && !specialByProvince[i]) {
-              specialByProvince[i] = nums[0];
-            }
-          }
-        });
-
-        for (let i = 0; i < provinceNames.length; i++) {
-          const daiName = provinceNames[i];
-          if (!daiName || provincePrizes[i].length === 0) continue;
-          const specialPrize =
-            specialByProvince[i] ||
-            (provincePrizes[i].find((p) => p.label === 'Giải đặc biệt')?.numbers?.[0] || '');
-
-          let drawDateMn = '';
-          const ngayA = document.querySelector('td.ngay a[href*="ket-qua-xo-so"]');
-          if (ngayA) {
-            const hm = (ngayA.getAttribute('href') || '').match(/(\d{2})-(\d{2})-(\d{4})/);
-            if (hm) drawDateMn = hm[1] + '/' + hm[2] + '/' + hm[3];
-            else {
-              const tm = (ngayA.textContent || '').match(/(\d{2}\/\d{2}\/\d{4})/);
-              if (tm) drawDateMn = tm[1];
-            }
-          }
-          allResults[daiName] = {
-            specialPrize,
-            prizes: provincePrizes[i],
-            drawDate: drawDateMn,
-          };
-        }
-      });
-      return allResults;
-    });
-
-    let finalResults = safeRegion === 'mb' ? normalizeMienBacXsktMap(results) : results;
+    const pageHtml = await page.content();
+    let rawBrowser = parseAllXSKTByCheerio(pageHtml, dateStr);
+    if (Object.keys(rawBrowser).length === 0 && safeRegion === 'mb') {
+      rawBrowser = parseMienBacMinhNgocByCheerio(pageHtml);
+    }
+    let finalResults = safeRegion === 'mb' ? normalizeMienBacXsktMap(rawBrowser) : rawBrowser;
+    finalResults = filterXsktResultsByRequestedDate(finalResults, dateStr);
     stampXsktResultsDrawDate(finalResults, dateStr);
-    console.log('[XSKT all] Tìm được', Object.keys(finalResults).length, 'đài');
+    console.log('[XSKT all] browser+cheerio, tìm được', Object.keys(finalResults).length, 'đài');
     setCache(cacheKey, finalResults);
     return finalResults;
   });
@@ -2790,8 +2739,12 @@ async function backfillXSKTDateRangeToSupabase(startDate, endDate, options) {
           continue;
         }
         const drawDateForSave = minhNgocSlugToViDate(slug);
+        const wantIso = normalizeDrawDateForSupabase(drawDateForSave);
         for (const [dai, row] of Object.entries(all)) {
-          const saved = await saveXSKTToSupabase(dai, drawDateForSave || row.drawDate, row);
+          if (!xsktDaiScheduledOnDrawDate(region, dai, drawDateForSave)) continue;
+          const rowIso = normalizeDrawDateForSupabase(row.drawDate);
+          if (wantIso && rowIso && rowIso !== wantIso) continue;
+          const saved = await saveXSKTToSupabase(dai, drawDateForSave, row);
           if (saved) stats.rowsSaved++;
         }
         stats.byRegion[region].ok++;
@@ -2816,10 +2769,13 @@ module.exports = {
   resolveCanonicalXsktDai,
   findXsktDaiKeyInResults,
   xsktDaiLookupNames,
+  xsktDaiScheduledOnDrawDate,
+  filterXsktResultsByRequestedDate,
   scrapeVietlott,
   scrapeVietlottDetailOnly,
   forwardFillVietlottFromSupabase,
   scrapeAllXSKT,
+  parseAllXSKTByCheerio,
   saveVietlottToSupabase,
   saveXSKTToSupabase,
   getVietlottFromSupabase,
