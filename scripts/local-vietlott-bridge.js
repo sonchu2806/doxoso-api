@@ -60,11 +60,36 @@ function pickKyDrawFromScrape(data) {
   return { kySo, drawDate, hasPayload: !!hasPayload };
 }
 
-async function syncVietlottAll() {
+/** Body/query maxAhead, delayMs — cùng trần với server (env VIETLOTT_FORWARD_FILL_MAX, mặc định 48, max 500). */
+function forwardFillOptsFromBody(body) {
+  const opts = {};
+  const src = body && typeof body === 'object' ? body : {};
+  const maxRaw = parseInt(String(src.maxAhead != null ? src.maxAhead : ''), 10);
+  const delayRaw = parseInt(String(src.delayMs != null ? src.delayMs : ''), 10);
+  if (Number.isFinite(maxRaw) && maxRaw > 0) {
+    opts.maxAhead = Math.min(500, maxRaw);
+  } else {
+    const envDefault = parseInt(process.env.VIETLOTT_FORWARD_FILL_MAX || '48', 10);
+    if (Number.isFinite(envDefault) && envDefault > 0) {
+      opts.maxAhead = Math.min(500, envDefault);
+    }
+  }
+  if (Number.isFinite(delayRaw) && delayRaw >= 0) {
+    opts.delayMs = delayRaw;
+  }
+  return opts;
+}
+
+async function syncVietlottAll(body) {
+  const forwardFill = forwardFillOptsFromBody(body);
   const results = {};
   for (const product of VIETLOTT_PRODUCT_IDS) {
     try {
-      const opts = { forceNetwork: true, forwardFillFromSupabase: true };
+      const opts = {
+        forceNetwork: true,
+        forwardFillFromSupabase: true,
+        forwardFill,
+      };
       const data = await scrapeVietlott(product, null, opts);
       const picked = pickKyDrawFromScrape(data);
       results[product] = {
@@ -138,10 +163,11 @@ app.get('/api/status/latest', bridgeAuth, async (_req, res) => {
   }
 });
 
-app.post('/api/sync/vietlott', bridgeAuth, async (_req, res) => {
+app.post('/api/sync/vietlott', bridgeAuth, async (req, res) => {
   try {
-    const results = await syncVietlottAll();
-    res.json({ success: true, results });
+    const forwardFill = forwardFillOptsFromBody(req.body);
+    const results = await syncVietlottAll(req.body);
+    res.json({ success: true, forwardFill, results });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -156,11 +182,12 @@ app.post('/api/sync/xskt', bridgeAuth, async (_req, res) => {
   }
 });
 
-app.post('/api/sync/full', bridgeAuth, async (_req, res) => {
+app.post('/api/sync/full', bridgeAuth, async (req, res) => {
   try {
-    const vietlott = await syncVietlottAll();
+    const forwardFill = forwardFillOptsFromBody(req.body);
+    const vietlott = await syncVietlottAll(req.body);
     const xskt = await syncXsktThreeRegions();
-    res.json({ success: true, vietlott, xskt });
+    res.json({ success: true, forwardFill, vietlott, xskt });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }

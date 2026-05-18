@@ -54,6 +54,13 @@
   </table>
   <button type="button" class="ghost" id="btn-refresh-latest">Làm mới bảng (Supabase)</button>
 
+  <h2 class="panel-title" style="margin-top:16px">Forward-fill (kèm mỗi lần đồng bộ Vietlott)</h2>
+  <p class="panel-hint">Từ kỳ lớn nhất trong Supabase, dò T+1, T+2… trước khi lấy kỳ hiện tại. Log <code>đạt trần maxAhead=48</code> → tăng số dưới (Keno thường 120–200).</p>
+  <p>
+    <label for="maxAhead">maxAhead (bước T+1…, tối đa 500)</label>
+    <input type="number" id="maxAhead" min="1" max="500" value="120" />
+  </p>
+
   <div id="xskt-latest-wrap" style="display:none">
     <h2 class="panel-title" style="margin-top:16px">XSKT (lần sync gần nhất)</h2>
     <p class="panel-hint">Chỉ hiện sau khi bạn chạy đồng bộ có XSKT; lấy theo ngày trên trang vừa scrape.</p>
@@ -264,11 +271,18 @@
         });
     }
 
+    function syncBody() {
+      var max = parseInt(document.getElementById('maxAhead').value, 10);
+      if (!Number.isFinite(max) || max < 1) max = 120;
+      max = Math.min(500, Math.max(1, max));
+      return JSON.stringify({ maxAhead: max });
+    }
+
     function post(path) {
       statusEl.textContent = 'Đang chạy… (có thể vài phút)';
       out.textContent = '…';
       xsktWrap.style.display = 'none';
-      fetch(path, { method: 'POST', headers: headers(), body: '{}' })
+      fetch(path, { method: 'POST', headers: headers(), body: syncBody() })
         .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
         .then(function (x) {
           statusEl.textContent = x.ok ? 'Xong.' : 'Lỗi HTTP';

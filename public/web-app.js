@@ -285,6 +285,9 @@
 
   var scanBusy = false;
   var scanOpen = false;
+  var scanStream = null;
+  var scanFacing = 'environment';
+  var scanTorchOn = false;
 
   function normalizeViDateString(s) {
     var t = String(s || '').trim();
@@ -332,23 +335,124 @@
     return null;
   }
 
+  function stopScanCamera() {
+    if (scanStream) {
+      scanStream.getTracks().forEach(function (t) {
+        try {
+          t.stop();
+        } catch (e) {}
+      });
+      scanStream = null;
+    }
+    var video = document.getElementById('scan-camera-video');
+    if (video) video.srcObject = null;
+    scanTorchOn = false;
+    var flashBtn = document.getElementById('scan-camera-flash');
+    if (flashBtn) flashBtn.classList.remove('on');
+  }
+
+  function getScanVideoTrack() {
+    if (!scanStream) return null;
+    var tracks = scanStream.getVideoTracks();
+    return tracks && tracks[0] ? tracks[0] : null;
+  }
+
+  function setScanTorch(on) {
+    var track = getScanVideoTrack();
+    if (!track) return Promise.resolve(false);
+    var caps = track.getCapabilities && track.getCapabilities();
+    if (!caps || !caps.torch) {
+      toast('Thiết bị không hỗ trợ đèn flash trên trình duyệt này');
+      return Promise.resolve(false);
+    }
+    return track
+      .applyConstraints({ advanced: [{ torch: !!on }] })
+      .then(function () {
+        scanTorchOn = !!on;
+        var flashBtn = document.getElementById('scan-camera-flash');
+        if (flashBtn) flashBtn.classList.toggle('on', scanTorchOn);
+        return true;
+      })
+      .catch(function () {
+        toast('Không bật được flash');
+        return false;
+      });
+  }
+
+  function startScanCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return Promise.reject(new Error('Trình duyệt không hỗ trợ camera'));
+    }
+    stopScanCamera();
+    var video = document.getElementById('scan-camera-video');
+    var constraints = {
+      audio: false,
+      video: {
+        facingMode: scanFacing,
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+      },
+    };
+    return navigator.mediaDevices.getUserMedia(constraints).then(function (stream) {
+      scanStream = stream;
+      if (video) {
+        video.srcObject = stream;
+        return video.play().catch(function () {});
+      }
+    });
+  }
+
+  function captureFromScanCamera() {
+    var video = document.getElementById('scan-camera-video');
+    if (!video || !video.videoWidth) return Promise.reject(new Error('Camera chưa sẵn sàng'));
+    var w = video.videoWidth;
+    var h = video.videoHeight;
+    var canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+    return new Promise(function (resolve, reject) {
+      canvas.toBlob(
+        function (blob) {
+          if (!blob) return reject(new Error('Không chụp được ảnh'));
+          resolve(new File([blob], 'scan.jpg', { type: 'image/jpeg' }));
+        },
+        'image/jpeg',
+        0.9
+      );
+    });
+  }
+
   function setScanOverlayOpen(open) {
-    var ov = document.getElementById('scan-overlay');
-    var load = document.getElementById('scan-loading');
+    var ov = document.getElementById('scan-camera');
+    var busy = document.getElementById('scan-camera-busy');
     var prev = document.getElementById('scan-preview');
     var box = document.getElementById('scan-result-box');
     var ns = document.getElementById('nav-scan');
+    var shutter = document.getElementById('scan-camera-shutter');
     scanOpen = !!open;
     if (!ov) return;
     if (open) {
       ov.classList.add('open');
       ov.setAttribute('aria-hidden', 'false');
       if (ns) ns.classList.add('on');
+      document.body.style.overflow = 'hidden';
+      if (shutter) shutter.disabled = false;
+      startScanCamera().catch(function (e) {
+        toast((e && e.message) || 'Không mở được camera — thử chọn ảnh từ thư viện');
+        var gal = document.getElementById('scan-file-gallery');
+        if (gal) {
+          gal.value = '';
+          gal.click();
+        }
+      });
     } else {
       ov.classList.remove('open');
       ov.setAttribute('aria-hidden', 'true');
+      document.body.style.overflow = '';
+      stopScanCamera();
       scanBusy = false;
-      if (load) load.classList.remove('show');
+      if (busy) busy.classList.remove('show');
       if (prev) {
         prev.classList.remove('show');
         prev.removeAttribute('src');
@@ -358,19 +462,20 @@
         box.innerHTML = '';
       }
       if (ns) ns.classList.remove('on');
+      if (shutter) shutter.disabled = false;
     }
   }
 
   function setScanLoading(on) {
-    var load = document.getElementById('scan-loading');
-    var acts = document.querySelector('#scan-overlay .scan-actions');
+    var busy = document.getElementById('scan-camera-busy');
     var box = document.getElementById('scan-result-box');
-    if (load) load.classList.toggle('show', !!on);
-    if (acts) acts.style.display = on ? 'none' : '';
+    var shutter = document.getElementById('scan-camera-shutter');
+    if (busy) busy.classList.toggle('show', !!on);
     if (on && box) {
       box.classList.remove('show');
       box.innerHTML = '';
     }
+    if (shutter) shutter.disabled = !!on;
     scanBusy = !!on;
   }
 
@@ -599,42 +704,75 @@
       })
       .finally(function () {
         setScanLoading(false);
-        var cam = document.getElementById('scan-file-camera');
         var gal = document.getElementById('scan-file-gallery');
-        if (cam) cam.value = '';
         if (gal) gal.value = '';
       });
   }
 
-  function wireScan() {
-    var cam = document.getElementById('scan-file-camera');
+  function openScanGalleryPicker() {
+    if (scanBusy) return;
     var gal = document.getElementById('scan-file-gallery');
-    if ((!cam && !gal) || !document.getElementById('scan-overlay')) return;
+    if (!gal) return;
+    gal.value = '';
+    gal.click();
+  }
 
-    function bindInput(inp) {
-      if (!inp) return;
-      inp.addEventListener('change', function () {
-        var f = inp.files && inp.files[0];
-        if (f) uploadScanImage(f);
+  function wireScan() {
+    var gal = document.getElementById('scan-file-gallery');
+    if (!gal || !document.getElementById('scan-camera')) return;
+
+    gal.addEventListener('change', function () {
+      var f = gal.files && gal.files[0];
+      if (f) uploadScanImage(f);
+    });
+
+    var closeBtn = document.getElementById('scan-camera-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function () {
+        if (scanBusy) return;
+        setScanOverlayOpen(false);
       });
     }
-    bindInput(cam);
-    bindInput(gal);
 
-    document.getElementById('scan-pick-camera').addEventListener('click', function () {
-      if (scanBusy) return;
-      if (cam) {
-        cam.value = '';
-        cam.click();
-      }
-    });
-    document.getElementById('scan-pick-gallery').addEventListener('click', function () {
-      if (scanBusy) return;
-      if (gal) {
-        gal.value = '';
-        gal.click();
-      }
-    });
+    var flashBtn = document.getElementById('scan-camera-flash');
+    if (flashBtn) {
+      flashBtn.addEventListener('click', function () {
+        if (scanBusy) return;
+        setScanTorch(!scanTorchOn);
+      });
+    }
+
+    var galleryBtn = document.getElementById('scan-camera-gallery');
+    if (galleryBtn) {
+      galleryBtn.addEventListener('click', function () {
+        openScanGalleryPicker();
+      });
+    }
+
+    var flipBtn = document.getElementById('scan-camera-flip');
+    if (flipBtn) {
+      flipBtn.addEventListener('click', function () {
+        if (scanBusy) return;
+        scanFacing = scanFacing === 'environment' ? 'user' : 'environment';
+        startScanCamera().catch(function (e) {
+          toast((e && e.message) || 'Không đổi được camera');
+        });
+      });
+    }
+
+    var shutter = document.getElementById('scan-camera-shutter');
+    if (shutter) {
+      shutter.addEventListener('click', function () {
+        if (scanBusy) return;
+        captureFromScanCamera()
+          .then(function (file) {
+            uploadScanImage(file);
+          })
+          .catch(function (e) {
+            toast((e && e.message) || 'Không chụp được ảnh');
+          });
+      });
+    }
   }
 
   function fetchJSON(url) {

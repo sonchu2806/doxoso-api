@@ -178,54 +178,122 @@
       will-change: transform;
     }
     .saved-swipe-front .saved-card { margin-bottom: 0; }
-    .scan-overlay {
-      position: fixed; left: 0; right: 0; top: 0; bottom: 106px; z-index: 90;
-      background: rgba(17,17,20,0.94);
-      display: none; flex-direction: column; padding: 48px 16px 20px;
-      overflow-y: auto; -webkit-overflow-scrolling: touch;
+    .scan-camera {
+      position: fixed; inset: 0; z-index: 130; background: #000;
+      display: none; flex-direction: column; overflow: hidden;
     }
-    .scan-overlay.open { display: flex; }
+    .scan-camera.open { display: flex; }
+    .scan-camera video {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; background: #111;
+    }
+    .scan-camera-ui {
+      position: relative; z-index: 2; flex: 1; display: flex; flex-direction: column;
+      pointer-events: none;
+    }
+    .scan-camera-ui > * { pointer-events: auto; }
+    .scan-camera-top {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: calc(12px + env(safe-area-inset-top, 0)) 16px 8px;
+    }
+    .scan-camera-icon-btn {
+      width: 44px; height: 44px; border: none; border-radius: 50%;
+      background: rgba(0,0,0,0.35); color: #fff; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .scan-camera-icon-btn.on { background: rgba(255,255,255,0.25); }
+    .scan-camera-icon-btn svg { width: 22px; height: 22px; fill: currentColor; }
+    .scan-camera-center {
+      flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 0 24px;
+    }
+    .scan-camera-frame {
+      width: min(92vw, 340px); aspect-ratio: 1.45 / 1;
+      border: 2px solid rgba(255,255,255,0.92); border-radius: 14px;
+      box-shadow: 0 0 0 9999px rgba(0,0,0,0.45);
+      pointer-events: none;
+    }
+    .scan-camera-hint {
+      margin: 18px 0 0; max-width: 300px; text-align: center;
+      color: #fff; font-size: 13px; line-height: 1.45; font-weight: 500;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    }
+    .scan-camera-bottom {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 28px calc(20px + env(safe-area-inset-bottom, 0));
+    }
+    .scan-camera-shutter {
+      width: 72px; height: 72px; border-radius: 50%; border: 4px solid #fff;
+      background: transparent; cursor: pointer; flex-shrink: 0;
+      box-shadow: inset 0 0 0 3px rgba(255,255,255,0.35);
+      -webkit-tap-highlight-color: transparent;
+    }
+    .scan-camera-shutter:active { transform: scale(0.94); }
+    .scan-camera-shutter:disabled { opacity: 0.45; }
+    .scan-camera-gallery-thumb {
+      width: 44px; height: 44px; border-radius: 8px; border: 2px solid #fff;
+      background: rgba(255,255,255,0.15);
+      cursor: pointer; overflow: hidden; padding: 0;
+      display: flex; align-items: center; justify-content: center; color: #fff;
+    }
+    .scan-camera-gallery-thumb svg { width: 26px; height: 26px; fill: currentColor; opacity: 0.95; }
+    .scan-camera-busy {
+      position: absolute; inset: 0; z-index: 5; background: rgba(0,0,0,0.72);
+      display: none; flex-direction: column; align-items: center; justify-content: center;
+      color: #fff; text-align: center; padding: 24px;
+    }
+    .scan-camera-busy.show { display: flex; }
+    .scan-camera-busy p { margin: 8px 0 0; font-size: 14px; }
+    .scan-camera-busy .scan-busy-title { font-weight: 700; font-size: 16px; margin: 0; }
     .scan-result-box {
-      display: none; margin: 12px auto 0; max-width: 340px; width: 100%;
-      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
+      display: none; margin-top: 12px; max-width: 320px; width: 100%;
+      background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
       border-radius: 12px; padding: 12px; color: #fff; font-size: 13px; line-height: 1.5;
     }
     .scan-result-box.show { display: block; }
     .scan-result-box strong { color: #ffb8e0; }
-    .scan-overlay h2 { color: #fff; font-size: 17px; margin: 0 0 8px; text-align: center; }
-    .scan-overlay p { color: rgba(255,255,255,0.65); font-size: 13px; text-align: center; margin: 0 0 16px; }
-    .scan-actions { display: flex; flex-direction: column; gap: 10px; max-width: 320px; margin: 0 auto; width: 100%; }
-    .scan-actions button {
-      height: 48px; border-radius: 12px; border: none; font-weight: 700; font-size: 15px; cursor: pointer;
-    }
-    .scan-actions .scan-primary { background: #EB2F98; color: #fff; }
-    .scan-actions .scan-secondary { background: rgba(255,255,255,0.12); color: #fff; }
-    .scan-loading { display: none; text-align: center; color: #fff; margin-top: 24px; }
-    .scan-loading.show { display: block; }
-    .scan-preview { display: none; max-width: 280px; margin: 12px auto; border-radius: 12px; max-height: 160px; object-fit: contain; }
-    .scan-preview.show { display: block; }
-    #scan-file-camera, #scan-file-gallery {
+    .scan-preview { display: none; }
+    #scan-file-gallery {
       position: fixed; left: -9999px; width: 1px; height: 1px; opacity: 0;
     }
   </style>
 </head>
 <body>
-  <input type="file" id="scan-file-camera" accept="image/*" capture="environment" />
+  <!-- scan-file-camera removed: inline getUserMedia camera -->
   <input type="file" id="scan-file-gallery" accept="image/*" />
-  <div class="scan-overlay" id="scan-overlay" aria-hidden="true">
-    <h2>Scan vé số</h2>
-    <p>Đọc vé bằng OCR trước (miễn phí), không đủ thì dùng AI. Bấm <strong style="color:#fff">XSKT</strong> / <strong style="color:#fff">Vietlott</strong> bên dưới để nhập tay.</p>
-    <img id="scan-preview" class="scan-preview" alt="" />
-    <div class="scan-loading" id="scan-loading">
-      <p style="font-weight:700">Đang đọc vé…</p>
-      <p style="font-size:12px;opacity:0.7">Có thể mất 5–15 giây</p>
+  <div class="scan-camera" id="scan-camera" aria-hidden="true">
+    <video id="scan-camera-video" playsinline autoplay muted></video>
+    <div class="scan-camera-busy" id="scan-camera-busy" aria-live="polite">
+      <p class="scan-busy-title">Đang đọc vé…</p>
+      <p>Có thể mất 5–15 giây</p>
+      <div id="scan-result-box" class="scan-result-box"></div>
     </div>
-    <div id="scan-result-box" class="scan-result-box"></div>
-    <div class="scan-actions">
-      <button type="button" class="scan-primary" id="scan-pick-camera">Chụp vé</button>
-      <button type="button" class="scan-secondary" id="scan-pick-gallery">Chọn ảnh từ thư viện</button>
+    <div class="scan-camera-ui">
+      <div class="scan-camera-top">
+        <button type="button" class="scan-camera-icon-btn" id="scan-camera-close" aria-label="Đóng">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+        </button>
+        <button type="button" class="scan-camera-icon-btn" id="scan-camera-flash" aria-label="Đèn flash">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
+        </button>
+      </div>
+      <div class="scan-camera-center">
+        <div class="scan-camera-frame" aria-hidden="true"></div>
+        <p class="scan-camera-hint">Di chuyển camera đến gần vé để quét nhanh hơn</p>
+      </div>
+      <div class="scan-camera-bottom">
+        <button type="button" class="scan-camera-gallery-thumb" id="scan-camera-gallery" aria-label="Chọn ảnh từ thư viện">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+        </button>
+        <button type="button" class="scan-camera-shutter" id="scan-camera-shutter" aria-label="Chụp vé"></button>
+        <button type="button" class="scan-camera-icon-btn" id="scan-camera-flip" aria-label="Đổi camera">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 5h-3.17L15 3H9L7.17 5H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-8 13c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.65 0-3 1.35-3 3s1.35 3 3 3 3-1.35 3-3-1.35-3-3-3zM5 7h1.83l1-1h6.34l1 1H19v2H5V7z"/></svg>
+        </button>
+      </div>
     </div>
   </div>
+  <img id="scan-preview" class="scan-preview" alt="" />
   <div class="toast" id="toast"></div>
 
   <div id="win-fx" class="win-fx hidden" aria-hidden="true"></div>

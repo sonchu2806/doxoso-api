@@ -15,6 +15,10 @@
     pre { background: #0d0d0d; padding: 12px; border-radius: 8px; overflow: auto; font-size: 11px; max-height: 320px; white-space: pre-wrap; word-break: break-all; }
     a { color: #7ab8ff; }
     code { background: #333; padding: 2px 6px; border-radius: 4px; }
+    label { display: block; font-size: 0.85rem; color: #b0b0b0; margin: 8px 0 4px; }
+    input[type="number"], select { background: #0d0d0d; color: #e8e8e8; border: 1px solid #444; border-radius: 6px; padding: 8px 10px; font-size: 0.95rem; min-height: 40px; width: 100%; box-sizing: border-box; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 8px; }
+    .row > div { flex: 1 1 140px; }
   </style>
 </head>
 <body>
@@ -33,6 +37,34 @@
   </section>
 
   <section>
+    <h2 style="margin:0 0 10px;font-size:1rem">Vietlott — forward-fill &amp; đồng bộ</h2>
+    <p style="margin-top:0">Khi log <code>đạt trần an toàn maxAhead=48</code>, Keno còn thiếu kỳ phía trước — tăng <strong>maxAhead</strong> (tối đa 500) hoặc đặt <code>VIETLOTT_FORWARD_FILL_MAX</code> trên Railway.</p>
+    <div class="row">
+      <div>
+        <label for="ff-max">maxAhead (bước T+1…)</label>
+        <input type="number" id="ff-max" min="1" max="500" value="120" />
+      </div>
+      <div>
+        <label for="ff-product">Sản phẩm</label>
+        <select id="ff-product">
+          <option value="keno" selected>Keno</option>
+          <option value="mega">Mega 6/45</option>
+          <option value="power">Power 6/55</option>
+          <option value="lotto535">Lotto 5/35</option>
+          <option value="max3d">Max3D</option>
+          <option value="max3dpro">Max3D Pro</option>
+          <option value="all">Tất cả game</option>
+        </select>
+      </div>
+    </div>
+    <button type="button" id="btn-ff">Forward-fill (nền)</button>
+    <button type="button" id="btn-ff-wait" class="secondary">Forward-fill (chờ xong)</button>
+    <button type="button" id="btn-warm" class="secondary">Warm Vietlott</button>
+    <button type="button" id="btn-sync-today" class="secondary">Sync hôm nay</button>
+    <pre id="out-vl">—</pre>
+  </section>
+
+  <section>
     <h2 style="margin:0 0 10px;font-size:1rem">Liên kết debug (mở tab mới)</h2>
     <p><a href="/debug-resolved-url?product=mega" target="_blank" rel="noopener">/debug-resolved-url?product=mega</a></p>
     <p><a href="/debug-vietlott-html?product=mega" target="_blank" rel="noopener">/debug-vietlott-html?product=mega</a></p>
@@ -41,21 +73,52 @@
   <script>
     document.getElementById('origin').textContent = location.origin;
     var pre = document.getElementById('out');
-    function get(path) {
-      pre.textContent = 'Đang tải…';
+    var preVl = document.getElementById('out-vl');
+
+    function showJson(target, t) {
+      try { target.textContent = JSON.stringify(JSON.parse(t), null, 2); }
+      catch (e) { target.textContent = t; }
+    }
+
+    function get(path, target) {
+      target = target || pre;
+      target.textContent = 'Đang tải…';
       fetch(path)
         .then(function (r) { return r.text(); })
-        .then(function (t) {
-          try { pre.textContent = JSON.stringify(JSON.parse(t), null, 2); }
-          catch (e) { pre.textContent = t; }
-        })
-        .catch(function (e) { pre.textContent = String(e); });
+        .then(function (t) { showJson(target, t); })
+        .catch(function (e) { target.textContent = String(e); });
     }
+
+    function ffQuery(wait) {
+      var max = parseInt(document.getElementById('ff-max').value, 10) || 120;
+      max = Math.min(500, Math.max(1, max));
+      var product = document.getElementById('ff-product').value;
+      var q = 'maxAhead=' + encodeURIComponent(max) + '&product=' + encodeURIComponent(product);
+      if (wait) q += '&wait=1';
+      return '/admin/forward-fill-vietlott?' + q;
+    }
+
+    function syncTodayQuery() {
+      var max = parseInt(document.getElementById('ff-max').value, 10) || 120;
+      max = Math.min(500, Math.max(1, max));
+      return '/admin/sync-today?maxAhead=' + encodeURIComponent(max);
+    }
+
     document.getElementById('btn-health').onclick = function () { get('/health'); };
     document.getElementById('btn-test').onclick = function () { get('/test-connection'); };
     document.getElementById('btn-sb').onclick = function () { get('/admin/supabase-status'); };
     document.getElementById('btn-vl-net').onclick = function () { get('/admin/vietlott-connectivity?product=mega'); };
     document.getElementById('btn-scan-usage').onclick = function () { get('/admin/scan-usage'); };
+
+    document.getElementById('btn-ff').onclick = function () { get(ffQuery(false), preVl); };
+    document.getElementById('btn-ff-wait').onclick = function () { get(ffQuery(true), preVl); };
+    document.getElementById('btn-warm').onclick = function () {
+      var keno = document.getElementById('ff-product').value === 'keno' ? 120 : 48;
+      var max = parseInt(document.getElementById('ff-max').value, 10);
+      if (Number.isFinite(max) && max > 0) keno = Math.min(200, max);
+      get('/admin/warm-vietlott?kenoMaxBack=' + encodeURIComponent(keno), preVl);
+    };
+    document.getElementById('btn-sync-today').onclick = function () { get(syncTodayQuery(), preVl); };
   </script>
 </body>
 </html>

@@ -62,7 +62,22 @@ const {
   isMienBacDaiQuery,
   normalizeDrawDateForSupabase,
   diagnoseVietlottConnectivity,
+  forwardFillVietlottFromSupabase,
 } = vs;
+
+/** Query ?maxAhead= / ?forwardFillMax= — trần bước T+1… (mặc định env VIETLOTT_FORWARD_FILL_MAX hoặc 48, tối đa 500). */
+function forwardFillOptsFromQuery(req) {
+  const opts = {};
+  const maxRaw = parseInt(String(req.query.maxAhead || req.query.forwardFillMax || ''), 10);
+  const delayRaw = parseInt(String(req.query.delayMs || ''), 10);
+  if (Number.isFinite(maxRaw) && maxRaw > 0) {
+    opts.maxAhead = Math.min(500, maxRaw);
+  }
+  if (Number.isFinite(delayRaw) && delayRaw >= 0) {
+    opts.delayMs = delayRaw;
+  }
+  return opts;
+}
 
 /** Kỳ theo lịch quay (khi Supabase mới có vài dòng — ví dụ Lotto 5/35). */
 async function buildSyntheticKyList(product, limit) {
@@ -422,10 +437,16 @@ app.get('/admin/backfill-vietlott', async (req, res) => {
 app.get('/admin/sync-today', async (req, res) => {
   const wait = req.query.wait === '1' || req.query.sync === '1';
 
+  const ffOpts = forwardFillOptsFromQuery(req);
+
   async function job() {
     for (const product of VIETLOTT_PRODUCT_IDS) {
       try {
-        await scrapeVietlott(product, null, { forceNetwork: true, forwardFillFromSupabase: true });
+        await scrapeVietlott(product, null, {
+          forceNetwork: true,
+          forwardFillFromSupabase: true,
+          forwardFill: ffOpts,
+        });
         console.log('[admin/sync-today] vietlott ok', product);
       } catch (e) {
         console.warn('[admin/sync-today] vietlott', product, e.message);
@@ -470,6 +491,89 @@ app.get('/admin/sync-today', async (req, res) => {
     mode: 'background',
     message:
       'Đã khởi chạy đồng bộ trên server (Vietlott + XSKT 3 miền). Vài phút sau mở “Supabase status” hoặc xem log Railway. Máy tính/điện thoại của bạn không cần bật sau khi đã nhận phản hồi này.',
+    forwardFill: Object.keys(ffOpts).length ? ffOpts : null,
+  });
+});
+
+/**
+ * Forward-fill: từ kỳ lớn nhất đã có đủ số trong Supabase, dò T+1, T+2… qua trang chi tiết.
+ * ?product=keno (mặc định) hoặc ?products=keno,mega — ?maxAhead=120 (mặc định 48 / env VIETLOTT_FORWARD_FILL_MAX).
+ * ?wait=1 — chờ xong (Keno 120 kỳ có thể ~1–2 phút).
+ */
+app.get('/admin/forward-fill-vietlott', async (req, res) => {
+  if (!supabase) {
+    return res.status(400).json({
+      success: false,
+      error: 'Chưa cấu hình SUPABASE_URL / SUPABASE_ANON_KEY.',
+    });
+  }
+  const wait = req.query.wait === '1' || req.query.sync === '1';
+  const ffOpts = forwardFillOptsFromQuery(req);
+  const envDefault = parseInt(process.env.VIETLOTT_FORWARD_FILL_MAX || '48', 10);
+  const maxAheadUsed =
+    ffOpts.maxAhead ||
+    (Number.isFinite(envDefault) && envDefault > 0 ? Math.min(500, envDefault) : 48);
+
+  let productList = ['keno'];
+  const only = String(req.query.products || req.query.product || 'keno').trim();
+  if (only && only.toLowerCase() !== 'all') {
+    productList = only
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter((p) => VIETLOTT_PRODUCT_IDS.includes(p));
+    if (productList.length === 0) {
+      return res.status(400).json({ success: false, error: 'product/products không hợp lệ' });
+    }
+  } else if (only.toLowerCase() === 'all') {
+    productList = [...VIETLOTT_PRODUCT_IDS];
+  }
+
+  async function runFill() {
+    const summaries = {};
+    for (const product of productList) {
+      try {
+        summaries[product] = await forwardFillVietlottFromSupabase(product, ffOpts);
+      } catch (e) {
+        summaries[product] = { product, error: e.message, fetched: [] };
+      }
+    }
+    return summaries;
+  }
+
+  if (wait) {
+    try {
+      const summaries = await runFill();
+      return res.json({
+        success: true,
+        mode: 'wait',
+        maxAhead: maxAheadUsed,
+        forwardFill: ffOpts,
+        products: productList,
+        summaries,
+      });
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  }
+
+  setImmediate(function () {
+    runFill()
+      .then(function (summaries) {
+        console.log('[admin/forward-fill-vietlott] xong', JSON.stringify(summaries));
+      })
+      .catch(function (e) {
+        console.error('[admin/forward-fill-vietlott]', e);
+      });
+  });
+
+  return res.json({
+    success: true,
+    mode: 'background',
+    maxAhead: maxAheadUsed,
+    forwardFill: ffOpts,
+    products: productList,
+    message:
+      'Đang forward-fill (T+1 từ kỳ lớn nhất trong Supabase). Nếu log “đạt trần maxAhead”, tăng ?maxAhead= hoặc biến VIETLOTT_FORWARD_FILL_MAX trên Railway.',
   });
 });
 
