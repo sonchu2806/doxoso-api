@@ -1618,8 +1618,10 @@
       return rank(a.label) - rank(b.label);
     });
     var lines =
-      '<div class="result"><h3>Kết quả</h3><p style="color:#8A8F98;font-size:12px">Ngày: ' +
-      escapeHtml(ar.drawDate || '') +
+      '<div class="result"><h3>Kết quả</h3><p style="color:#8A8F98;font-size:12px;margin:4px 0 0">Đài: ' +
+      escapeHtml(ar.dai || state.xsktDai || '—') +
+      ' · Ngày: ' +
+      escapeHtml(ar.drawDate || state.xsktDate || '') +
       '</p><div style="margin-top:10px;padding:10px;border-radius:8px;background:#F7F8FC"><div style="font-weight:800;color:' +
       (cr.prize ? '#11845B' : '#303233') +
       '">' +

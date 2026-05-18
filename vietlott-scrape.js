@@ -1278,6 +1278,7 @@ async function saveXSKTToSupabase(dai, drawDate, data) {
     return false;
   }
   try {
+    const canonicalDai = resolveCanonicalXsktDai(dai);
     const viDate = normalizeDrawDateForSupabase(drawDate);
     if (!viDate) {
       console.error('[supabase] xskt skip — draw_date không hợp lệ:', dai, drawDate);
@@ -1285,7 +1286,7 @@ async function saveXSKTToSupabase(dai, drawDate, data) {
     }
     const { error } = await supabase.from('xskt_results').upsert(
       {
-        dai,
+        dai: canonicalDai,
         draw_date: viDate,
         special_prize: data.specialPrize || '',
         prizes: data.prizes || [],
@@ -1296,7 +1297,7 @@ async function saveXSKTToSupabase(dai, drawDate, data) {
       console.error('[supabase] xskt upsert failed:', dai, drawDate, viDate, error.message);
       return false;
     }
-    console.log('[supabase] saved xskt', dai, drawDate, '→', viDate);
+    console.log('[supabase] saved xskt', canonicalDai, drawDate, '→', viDate);
     return true;
   } catch (e) {
     console.error('[supabase] save xskt error:', e.message);
@@ -1310,19 +1311,24 @@ async function getXSKTFromSupabase(dai, drawDate) {
   try {
     const keyIso = normalizeDrawDateForSupabase(drawDate);
     if (!keyIso) return null;
-    const { data, error } = await supabase
-      .from('xskt_results')
-      .select('*')
-      .eq('dai', dai)
-      .eq('draw_date', keyIso)
-      .single();
-    if (error || !data) return null;
-    console.log('[supabase] cache hit xskt', dai, drawDate);
-    return {
-      specialPrize: data.special_prize,
-      prizes: data.prizes,
-      drawDate: drawDateFromPg(data.draw_date),
-    };
+    const names = xsktDaiLookupNames(dai);
+    for (const name of names) {
+      const { data, error } = await supabase
+        .from('xskt_results')
+        .select('*')
+        .eq('dai', name)
+        .eq('draw_date', keyIso)
+        .maybeSingle();
+      if (error || !data) continue;
+      console.log('[supabase] cache hit xskt', name, drawDate);
+      return {
+        specialPrize: data.special_prize,
+        prizes: data.prizes,
+        drawDate: drawDateFromPg(data.draw_date),
+        dai: resolveCanonicalXsktDai(name),
+      };
+    }
+    return null;
   } catch (e) {
     return null;
   }
@@ -1955,10 +1961,11 @@ function normProvince(s) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace('tp. ho chi minh', 'tp hcm')
-    .replace('tp.hcm', 'tp hcm')
+    .replace(/\./g, ' ')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    .replace(/^tp ho chi minh$/, 'tp hcm')
+    .replace(/^tp hcm$/, 'tp hcm');
 }
 
 function detectRegionByDai(dai) {
@@ -1970,10 +1977,78 @@ function detectRegionByDai(dai) {
   return 'mn';
 }
 
+function listAllXsktDaiNames() {
+  const out = new Set();
+  out.add(XSKT_MIEN_BAC_LABEL);
+  for (const region of ['mb', 'mt', 'mn']) {
+    const sched = XSKT_REGIONS[region];
+    if (!sched) continue;
+    for (const key of Object.keys(sched)) {
+      const arr = sched[key];
+      if (Array.isArray(arr)) arr.forEach((d) => out.add(d));
+    }
+  }
+  return [...out];
+}
+
+/** Tên đài chuẩn trong lịch app (VD TP. Hồ Chí Minh, không lệch TP.HCM trên Minh Ngọc). */
+function resolveCanonicalXsktDai(dai) {
+  const raw = String(dai || '').trim();
+  if (!raw) return raw;
+  if (isMienBacDaiQuery(raw)) return XSKT_MIEN_BAC_LABEL;
+  const n = normProvince(raw);
+  for (const name of listAllXsktDaiNames()) {
+    if (normProvince(name) === n) return name;
+  }
+  return raw;
+}
+
+function xsktDaiLookupNames(dai) {
+  const names = new Set();
+  const canonical = resolveCanonicalXsktDai(dai);
+  names.add(canonical);
+  if (dai) names.add(String(dai).trim());
+  const n = normProvince(canonical);
+  for (const name of listAllXsktDaiNames()) {
+    if (normProvince(name) === n) names.add(name);
+  }
+  if (n === normProvince('TP.HCM') || n === normProvince('TP. Hồ Chí Minh')) {
+    names.add('TP.HCM');
+    names.add('TP. Hồ Chí Minh');
+  }
+  return [...names];
+}
+
+/** Khớp đài trong object scrape — chỉ so khớp chuẩn hóa, không dùng includes mơ hồ. */
+function findXsktDaiKeyInResults(allResults, dai) {
+  if (!allResults || typeof allResults !== 'object') return null;
+  const n = normProvince(resolveCanonicalXsktDai(dai));
+  const keys = Object.keys(allResults);
+  return keys.find((k) => normProvince(k) === n) || null;
+}
+
 function minhNgocSlugToViDateEarly(slug) {
   const m = String(slug || '').trim().match(/^(\d{2})-(\d{2})-(\d{4})$/);
   if (!m) return '';
   return m[1] + '/' + m[2] + '/' + m[3];
+}
+
+/** Ngày quay trong phạm vi một bảng kết quả (tránh lấy nhầm block ngày khác trên cùng trang). */
+function extractMinhNgocDrawDateFromTable($, $table) {
+  const dateRegex = /(\d{2}\/\d{2}\/\d{4})/;
+  const hrefRe = /\/ket-qua-xo-so\/(\d{2}-\d{2}-\d{4})\.html/i;
+  const root = $table && $table.length ? $table : $;
+
+  const $ngayLink = root.find('td.ngay a[href*="ket-qua-xo-so"]').first();
+  if ($ngayLink.length) {
+    const hm = ($ngayLink.attr('href') || '').match(hrefRe);
+    if (hm) return minhNgocSlugToViDateEarly(hm[1]);
+    const tm = ($ngayLink.text() || '').trim().match(dateRegex);
+    if (tm) return tm[1];
+  }
+
+  const ngayCell = (root.find('td.ngay').first().text() || '').match(dateRegex);
+  return ngayCell ? ngayCell[1] : '';
 }
 
 /** Ngày quay: ưu tiên td.ngay > a href /ket-qua-xo-so/DD-MM-YYYY.html (Minh Ngọc). */
@@ -2049,9 +2124,20 @@ function parseAllXSKTByCheerio(html, urlSlug) {
   };
 
   const allResults = {};
+  const wantedVi =
+    (urlSlug && minhNgocSlugToViDateEarly(urlSlug)) || drawDateFromHtml || '';
+  const wantedIso = wantedVi ? normalizeDrawDateForSupabase(wantedVi) : '';
 
   $(MINH_NGOC_XSKT_TABLE_SEL).each((_, tableEl) => {
     const $table = $(tableEl);
+    if (wantedIso) {
+      const tableVi = extractMinhNgocDrawDateFromTable($, $table);
+      const tableIso = tableVi ? normalizeDrawDateForSupabase(tableVi) : '';
+      if (tableIso && tableIso !== wantedIso) return;
+    }
+    const tableDrawDate =
+      extractMinhNgocDrawDateFromTable($, $table) || drawDateFromHtml || wantedVi || '';
+
     $table.find('td.tinh').each((__, tinhEl) => {
       const daiName = ($(tinhEl).text() || '')
         .trim()
@@ -2085,7 +2171,7 @@ function parseAllXSKTByCheerio(html, urlSlug) {
           prizes.find((p) => p.label === 'Giải đặc biệt')?.numbers?.[0] ||
           '',
         prizes,
-        drawDate: drawDateFromHtml,
+        drawDate: tableDrawDate,
       };
     });
   });
@@ -2727,6 +2813,9 @@ module.exports = {
   toViDate,
   normalizeDrawDateForSupabase,
   detectRegionByDai,
+  resolveCanonicalXsktDai,
+  findXsktDaiKeyInResults,
+  xsktDaiLookupNames,
   scrapeVietlott,
   scrapeVietlottDetailOnly,
   forwardFillVietlottFromSupabase,

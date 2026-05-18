@@ -63,6 +63,9 @@ const {
   normalizeDrawDateForSupabase,
   diagnoseVietlottConnectivity,
   forwardFillVietlottFromSupabase,
+  resolveCanonicalXsktDai,
+  findXsktDaiKeyInResults,
+  xsktDaiLookupNames,
 } = vs;
 
 /** Query ?maxAhead= / ?forwardFillMax= — trần bước T+1… (mặc định env VIETLOTT_FORWARD_FILL_MAX hoặc 48, tối đa 500). */
@@ -111,60 +114,52 @@ async function buildSyntheticKyList(product, limit) {
   return list;
 }
 
-async function scrapeXSKT(dai, dateStr, region) {
-  const preferredRegion = region || detectRegionByDai(dai);
+async function scrapeXSKT(dai, dateStr, region, opts) {
+  opts = opts || {};
+  const canonicalDai = resolveCanonicalXsktDai(dai);
+  const preferredRegion = region || detectRegionByDai(canonicalDai);
   const drawDateKey = dateStr || toViDate(new Date());
 
-  const sbCached = await getXSKTFromSupabase(dai, drawDateKey);
-  if (sbCached) return sbCached;
-  if (isMienBacDaiQuery(dai)) {
-    const mbCached = await getXSKTFromSupabase(XSKT_MIEN_BAC_LABEL, drawDateKey);
-    if (mbCached) return mbCached;
+  if (!opts.forceNetwork) {
+    for (const name of xsktDaiLookupNames(canonicalDai)) {
+      const sbCached = await getXSKTFromSupabase(name, drawDateKey);
+      if (sbCached) return sbCached;
+    }
+    if (isMienBacDaiQuery(canonicalDai)) {
+      const mbCached = await getXSKTFromSupabase(XSKT_MIEN_BAC_LABEL, drawDateKey);
+      if (mbCached) return mbCached;
+    }
   }
 
   let allResults = await scrapeAllXSKT(dateStr, preferredRegion);
-  const keys = Object.keys(allResults);
 
-  if (allResults[XSKT_MIEN_BAC_LABEL] && isMienBacDaiQuery(dai)) {
-    const data = allResults[XSKT_MIEN_BAC_LABEL];
-    await saveXSKTToSupabase(XSKT_MIEN_BAC_LABEL, data.drawDate || drawDateKey, data);
-    return data;
+  async function finishAndSave(data, scrapedKey) {
+    const row = Object.assign({}, data, { dai: canonicalDai });
+    await saveXSKTToSupabase(canonicalDai, data.drawDate || drawDateKey, data);
+    return row;
   }
 
-  function norm(s) {
-    return s.toLowerCase()
-      .replace('tp. hồ chí minh', 'tp. hcm')
-      .replace('hồ chí minh', 'hcm')
-      .replace(/\s+/g, ' ').trim();
+  if (isMienBacDaiQuery(canonicalDai)) {
+    const mbKey = findXsktDaiKeyInResults(allResults, XSKT_MIEN_BAC_LABEL);
+    if (mbKey && allResults[mbKey]) return await finishAndSave(allResults[mbKey], mbKey);
   }
 
-  async function finishAndSave(data) {
-    await saveXSKTToSupabase(dai, data.drawDate || drawDateKey, data);
-    return data;
-  }
+  let foundKey = findXsktDaiKeyInResults(allResults, canonicalDai);
+  if (foundKey && allResults[foundKey]) return await finishAndSave(allResults[foundKey], foundKey);
 
-  const normDai = norm(dai);
-  if (allResults[dai]) return await finishAndSave(allResults[dai]);
-  let found = keys.find(k => norm(k) === normDai || norm(k).includes(normDai) || normDai.includes(norm(k)));
-  if (found) return await finishAndSave(allResults[found]);
-
-  // Fallback: thử các miền còn lại nếu không match ở miền ưu tiên
   for (const r of ['mb', 'mt', 'mn']) {
     if (r === preferredRegion) continue;
     allResults = await scrapeAllXSKT(dateStr, r);
-    if (allResults[XSKT_MIEN_BAC_LABEL] && isMienBacDaiQuery(dai)) {
-      const data = allResults[XSKT_MIEN_BAC_LABEL];
-      await saveXSKTToSupabase(XSKT_MIEN_BAC_LABEL, data.drawDate || drawDateKey, data);
-      return data;
+    if (isMienBacDaiQuery(canonicalDai)) {
+      const mbKey = findXsktDaiKeyInResults(allResults, XSKT_MIEN_BAC_LABEL);
+      if (mbKey && allResults[mbKey]) return await finishAndSave(allResults[mbKey], mbKey);
     }
-    const otherKeys = Object.keys(allResults);
-    if (allResults[dai]) return await finishAndSave(allResults[dai]);
-    found = otherKeys.find(k => norm(k) === normDai || norm(k).includes(normDai) || normDai.includes(norm(k)));
-    if (found) return await finishAndSave(allResults[found]);
+    foundKey = findXsktDaiKeyInResults(allResults, canonicalDai);
+    if (foundKey && allResults[foundKey]) return await finishAndSave(allResults[foundKey], foundKey);
   }
 
-  console.warn('[XSKT] Không tìm thấy:', dai, '| Có:', keys);
-  throw new Error('Đài ' + dai + ' chưa có kết quả hôm nay');
+  console.warn('[XSKT] Không tìm thấy:', canonicalDai, '| Có:', Object.keys(allResults));
+  throw new Error('Đài ' + canonicalDai + ' chưa có kết quả cho ngày đã chọn');
 }
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
@@ -271,8 +266,9 @@ app.get('/xskt/all', async (req, res) => {
 app.get('/xskt', async (req, res) => {
   const { dai, date, region } = req.query;
   if (!dai) return res.status(400).json({ success: false, error: 'Thiếu tham số dai' });
+  const forceNetwork = req.query.refresh === '1' || req.query.force === '1';
   try {
-    const result = await scrapeXSKT(dai, date, region);
+    const result = await scrapeXSKT(dai, date, region, { forceNetwork });
     res.json({ success: true, data: result });
   } catch(e) {
     console.error('XSKT error:', e.message);
