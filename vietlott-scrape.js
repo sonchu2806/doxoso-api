@@ -1970,14 +1970,50 @@ function detectRegionByDai(dai) {
   return 'mn';
 }
 
-function parseAllXSKTByCheerio(html) {
-  const $ = cheerio.load(html);
+function minhNgocSlugToViDateEarly(slug) {
+  const m = String(slug || '').trim().match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (!m) return '';
+  return m[1] + '/' + m[2] + '/' + m[3];
+}
+
+/** Ngày quay: ưu tiên td.ngay > a href /ket-qua-xo-so/DD-MM-YYYY.html (Minh Ngọc). */
+function extractMinhNgocDrawDateFromCheerio($, urlSlug) {
   const dateRegex = /(\d{2}\/\d{2}\/\d{4})/;
-  const preferredDateText = $('div.ngay, .title_ngay, h2, h3').first().text() || '';
-  const drawDateFromHtml =
-    (preferredDateText.match(dateRegex) || [])[1] ||
-    (($('body').text() || '').match(dateRegex) || [])[1] ||
-    toViDate(new Date());
+  const hrefRe = /\/ket-qua-xo-so\/(\d{2}-\d{2}-\d{4})\.html/i;
+
+  const $ngayLink = $('td.ngay a[href*="ket-qua-xo-so"]').first();
+  if ($ngayLink.length) {
+    const hm = ($ngayLink.attr('href') || '').match(hrefRe);
+    if (hm) return minhNgocSlugToViDateEarly(hm[1]);
+    const tm = ($ngayLink.text() || '').trim().match(dateRegex);
+    if (tm) return tm[1];
+  }
+
+  const ngayCell = ($('td.ngay').first().text() || '').match(dateRegex);
+  if (ngayCell) return ngayCell[1];
+
+  for (const el of $('.box_kqxs .title a').toArray()) {
+    const m = ($(el).text() || '').trim().match(dateRegex);
+    if (m) return m[1];
+  }
+
+  const hm = ($('h2, h3, .title_ngay, div.ngay').first().text() || '').match(dateRegex);
+  if (hm) return hm[1];
+
+  const fromSlug = minhNgocSlugToViDateEarly(urlSlug);
+  if (fromSlug) return fromSlug;
+
+  const scopeText = $('table[class*="bkq"], table.bangketquaSo, .box_kqxs').first().text() || '';
+  const m = scopeText.match(dateRegex);
+  return m ? m[1] : '';
+}
+
+const MINH_NGOC_XSKT_TABLE_SEL =
+  'table.bkqmiennam, table.bkqtmiennam, table.bkqmientrung, table[class*="bkq"], table.bangketquaSo';
+
+function parseAllXSKTByCheerio(html, urlSlug) {
+  const $ = cheerio.load(html);
+  const drawDateFromHtml = extractMinhNgocDrawDateFromCheerio($, urlSlug);
 
   const normalizePrizeLabel = (raw, cls = '') => {
     const text = String(raw || '').trim().toLowerCase();
@@ -2000,6 +2036,12 @@ function parseAllXSKTByCheerio(html) {
       .get()
       .filter((n) => n.length >= 2);
     if (byNode.length > 0) return byNode;
+    const raw = ($cell.text() || '').replace(/\D/g, '');
+    if (raw.length >= 8 && raw.length % 4 === 0) {
+      const chunks = [];
+      for (let i = 0; i < raw.length; i += 4) chunks.push(raw.slice(i, i + 4));
+      if (chunks.length) return chunks;
+    }
     return ($cell.text() || '')
       .split(/\s+/)
       .map((x) => x.replace(/\D/g, ''))
@@ -2007,6 +2049,49 @@ function parseAllXSKTByCheerio(html) {
   };
 
   const allResults = {};
+
+  $(MINH_NGOC_XSKT_TABLE_SEL).each((_, tableEl) => {
+    const $table = $(tableEl);
+    $table.find('td.tinh').each((__, tinhEl) => {
+      const daiName = ($(tinhEl).text() || '')
+        .trim()
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean)[0];
+      if (!daiName) return;
+
+      const prizes = [];
+      let specialPrize = '';
+      const cells = $(tinhEl).closest('tr').find('td').toArray();
+      const startIdx = cells.indexOf(tinhEl);
+      if (startIdx < 0) return;
+
+      for (let i = startIdx + 1; i < cells.length; i++) {
+        const $c = $(cells[i]);
+        const cls = String($c.attr('class') || '').toLowerCase();
+        if (cls.includes('tinh')) break;
+        if (!/(giaidb|giai\d)/.test(cls)) continue;
+        const nums = extractNumbers($c);
+        if (nums.length === 0) continue;
+        const prizeLabel = normalizePrizeLabel($c.text(), cls);
+        prizes.push({ label: prizeLabel, numbers: nums });
+        if (prizeLabel === 'Giải đặc biệt' && nums[0]) specialPrize = nums[0];
+      }
+
+      if (prizes.length === 0) return;
+      allResults[daiName] = {
+        specialPrize:
+          specialPrize ||
+          prizes.find((p) => p.label === 'Giải đặc biệt')?.numbers?.[0] ||
+          '',
+        prizes,
+        drawDate: drawDateFromHtml,
+      };
+    });
+  });
+
+  if (Object.keys(allResults).length > 0) return allResults;
+
   $('table.bangketquaSo').each((_, tableEl) => {
     const $table = $(tableEl);
     const provinceNames = $table.find('td.tinh')
@@ -2078,9 +2163,10 @@ function parseMienBacMinhNgocByCheerio(html) {
     .get()
     .filter(Boolean);
   const drawDate =
+    extractMinhNgocDrawDateFromCheerio($, null) ||
     titleDates[0] ||
     (firstBox.text().match(dateRegex) || [])[1] ||
-    toViDate(new Date());
+    '';
 
   const rowDefs = [
     ['giaidb', 'Giải đặc biệt'],
@@ -2171,7 +2257,7 @@ async function scrapeAllXSKT(dateStr, region = 'mn') {
   console.log('[XSKT all]', safeRegion, url);
   const html = await fetchHTML(url);
   if (html) {
-    let raw = parseAllXSKTByCheerio(html);
+    let raw = parseAllXSKTByCheerio(html, dateStr);
     if (Object.keys(raw).length === 0 && safeRegion === 'mb') {
       raw = parseMienBacMinhNgocByCheerio(html);
     }
@@ -2309,10 +2395,20 @@ async function scrapeAllXSKT(dateStr, region = 'mn') {
             specialByProvince[i] ||
             (provincePrizes[i].find((p) => p.label === 'Giải đặc biệt')?.numbers?.[0] || '');
 
+          let drawDateMn = '';
+          const ngayA = document.querySelector('td.ngay a[href*="ket-qua-xo-so"]');
+          if (ngayA) {
+            const hm = (ngayA.getAttribute('href') || '').match(/(\d{2})-(\d{2})-(\d{4})/);
+            if (hm) drawDateMn = hm[1] + '/' + hm[2] + '/' + hm[3];
+            else {
+              const tm = (ngayA.textContent || '').match(/(\d{2}\/\d{2}\/\d{4})/);
+              if (tm) drawDateMn = tm[1];
+            }
+          }
           allResults[daiName] = {
             specialPrize,
             prizes: provincePrizes[i],
-            drawDate: (() => { const d = new Date(); return String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0') + '/' + d.getFullYear(); })(),
+            drawDate: drawDateMn,
           };
         }
       });
