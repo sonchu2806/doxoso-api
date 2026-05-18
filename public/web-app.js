@@ -78,9 +78,9 @@
   };
 
   var state = {
-    channel: 'vietlott',
+    channel: 'xskt',
     tab: 'do',
-    product: 'keno',
+    product: 'lotto535',
     kenoTab: 'so',
     kenoText: null,
     picker: [],
@@ -1408,12 +1408,12 @@
       lotto535: '#F5C840',
     }[state.product];
     var items = [
-      { k: 'keno', l: 'Keno' },
-      { k: 'mega', l: 'Mega 6/45' },
+      { k: 'lotto535', l: 'Lotto 5/35' },
       { k: 'power', l: 'Power 6/55' },
+      { k: 'mega', l: 'Mega 6/45' },
+      { k: 'keno', l: 'Keno' },
       { k: 'max3d', l: 'Max 3D' },
       { k: 'max3dpro', l: 'Max 3D Pro' },
-      { k: 'lotto535', l: 'Lotto 5/35' },
     ];
     var chips = items
       .map(function (it) {
