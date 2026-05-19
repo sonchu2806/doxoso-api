@@ -110,11 +110,12 @@ async function syncXsktThreeRegions() {
   const out = { regions: {} };
   for (const region of ['mb', 'mt', 'mn']) {
     try {
-      const all = await scrapeAllXSKT(null, region);
+      const slug = vs.resolveXsktScrapeDateSlug(null, region);
+      const all = await scrapeAllXSKT(slug, region);
       let n = 0;
       const drawDates = new Set();
       for (const [dai, row] of Object.entries(all)) {
-        const drawDateNorm = normalizeDrawDateForSupabase(row.drawDate);
+        const drawDateNorm = normalizeDrawDateForSupabase(row.drawDate || slug);
         await saveXSKTToSupabase(dai, drawDateNorm, row);
         if (row && row.drawDate) drawDates.add(String(row.drawDate).trim());
         n++;
@@ -123,10 +124,12 @@ async function syncXsktThreeRegions() {
         ok: true,
         daiCount: n,
         drawDates: Array.from(drawDates).sort(),
+        dateSlug: slug || null,
       };
     } catch (e) {
       out.regions[region] = { ok: false, error: e.message };
     }
+    await new Promise((r) => setTimeout(r, 400));
   }
   return out;
 }

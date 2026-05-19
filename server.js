@@ -450,9 +450,10 @@ app.get('/admin/sync-today', async (req, res) => {
     }
     for (const region of ['mb', 'mt', 'mn']) {
       try {
-        const all = await scrapeAllXSKT(null, region);
+        const slug = vs.resolveXsktScrapeDateSlug(null, region);
+        const all = await scrapeAllXSKT(slug, region);
         for (const [dai, row] of Object.entries(all)) {
-          const drawDateNorm = normalizeDrawDateForSupabase(row.drawDate);
+          const drawDateNorm = normalizeDrawDateForSupabase(row.drawDate || slug);
           await saveXSKTToSupabase(dai, drawDateNorm, row);
         }
         console.log('[admin/sync-today] xskt', region, Object.keys(all).length, 'đài');

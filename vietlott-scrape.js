@@ -2405,57 +2405,84 @@ function isMienBacDaiQuery(dai) {
   return (XSKT_REGIONS.mb || []).some((p) => normProvince(p) === n);
 }
 
+/** Slug DD-MM-YYYY cho sync “hôm nay”. MB giữ null → trang mien-bac.html (trang theo ngày MB hay rỗng). */
+function xsktTodayDateSlug(region) {
+  const safeRegion = ['mb', 'mt', 'mn'].includes(region) ? region : 'mn';
+  if (safeRegion === 'mb') return null;
+  return formatMinhNgocDaySlug(new Date());
+}
+
+function resolveXsktScrapeDateSlug(dateStr, region) {
+  const t = String(dateStr || '').trim();
+  if (t) return t;
+  return xsktTodayDateSlug(region);
+}
+
+async function scrapeAllXSKTViaBrowser(url, dateStr, safeRegion, cacheKey) {
+  const runOnce = () =>
+    withBrowser(async (browser) => {
+      const page = await browser.newPage();
+      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await new Promise((r) => setTimeout(r, 4000));
+
+      const pageHtml = await page.content();
+      let rawBrowser = parseAllXSKTByCheerio(pageHtml, dateStr);
+      if (Object.keys(rawBrowser).length === 0 && safeRegion === 'mb') {
+        rawBrowser = parseMienBacMinhNgocByCheerio(pageHtml);
+      }
+      let finalResults = safeRegion === 'mb' ? normalizeMienBacXsktMap(rawBrowser) : rawBrowser;
+      finalResults = filterXsktResultsByRequestedDate(finalResults, dateStr);
+      stampXsktResultsDrawDate(finalResults, dateStr);
+      console.log('[XSKT all] browser+cheerio, tìm được', Object.keys(finalResults).length, 'đài');
+      setCache(cacheKey, finalResults);
+      return finalResults;
+    });
+
+  try {
+    return await runOnce();
+  } catch (e) {
+    const msg = String(e.message || e);
+    if (!/Target closed|Protocol error|Session closed/i.test(msg)) throw e;
+    console.warn('[XSKT all] browser lỗi, thử lại sau 2s:', msg.slice(0, 120));
+    await new Promise((r) => setTimeout(r, 2000));
+    return await runOnce();
+  }
+}
+
 async function scrapeAllXSKT(dateStr, region = 'mn') {
   const safeRegion = ['mb', 'mt', 'mn'].includes(region) ? region : 'mn';
+  const slug = resolveXsktScrapeDateSlug(dateStr, safeRegion);
   const cacheKey =
     'xskt_all_' +
     safeRegion +
     '_' +
-    (dateStr || 'today') +
+    (slug || 'today_mb') +
     (safeRegion === 'mb' ? '_chung' : '');
   const cached = getCache(cacheKey);
   if (cached) return cached;
 
   const mienSlug = safeRegion === 'mb' ? 'bac' : safeRegion === 'mt' ? 'trung' : 'nam';
   const base = 'https://www.minhngoc.net.vn/ket-qua-xo-so/mien-' + mienSlug;
-  const url = dateStr
-    ? base + '/' + dateStr + '.html'
-    : base + '.html';
+  const url = slug ? base + '/' + slug + '.html' : base + '.html';
   console.log('[XSKT all]', safeRegion, url);
   const html = await fetchHTML(url);
   if (html) {
-    let raw = parseAllXSKTByCheerio(html, dateStr);
+    let raw = parseAllXSKTByCheerio(html, slug);
     if (Object.keys(raw).length === 0 && safeRegion === 'mb') {
       raw = parseMienBacMinhNgocByCheerio(html);
     }
     if (Object.keys(raw).length > 0) {
       let quickResults = safeRegion === 'mb' ? normalizeMienBacXsktMap(raw) : raw;
-      quickResults = filterXsktResultsByRequestedDate(quickResults, dateStr);
-      stampXsktResultsDrawDate(quickResults, dateStr);
+      quickResults = filterXsktResultsByRequestedDate(quickResults, slug);
+      stampXsktResultsDrawDate(quickResults, slug);
       console.log('[XSKT all] using axios+cheerio, tìm được', Object.keys(quickResults).length, 'đài');
       setCache(cacheKey, quickResults);
       return quickResults;
     }
   }
 
-  return withBrowser(async (browser) => {
-    const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-    await new Promise(r => setTimeout(r, 5000));
-
-    const pageHtml = await page.content();
-    let rawBrowser = parseAllXSKTByCheerio(pageHtml, dateStr);
-    if (Object.keys(rawBrowser).length === 0 && safeRegion === 'mb') {
-      rawBrowser = parseMienBacMinhNgocByCheerio(pageHtml);
-    }
-    let finalResults = safeRegion === 'mb' ? normalizeMienBacXsktMap(rawBrowser) : rawBrowser;
-    finalResults = filterXsktResultsByRequestedDate(finalResults, dateStr);
-    stampXsktResultsDrawDate(finalResults, dateStr);
-    console.log('[XSKT all] browser+cheerio, tìm được', Object.keys(finalResults).length, 'đài');
-    setCache(cacheKey, finalResults);
-    return finalResults;
-  });
+  return scrapeAllXSKTViaBrowser(url, slug, safeRegion, cacheKey);
 }
 /**
  * Gọi scrape theo từng kỳ gần đây để upsert vào Supabase (bỏ qua kỳ đã có đủ dữ liệu).
@@ -2795,6 +2822,8 @@ module.exports = {
   estimateBackfillStepsForDays,
   backfillVietlottMonthsToSupabase,
   formatMinhNgocDaySlug,
+  xsktTodayDateSlug,
+  resolveXsktScrapeDateSlug,
   minhNgocSlugToViDate,
   stampXsktResultsDrawDate,
   backfillXSKTDateRangeToSupabase,

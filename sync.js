@@ -58,7 +58,8 @@ async function runTodayOnly() {
 
   for (const region of ['mb', 'mt', 'mn']) {
     try {
-      const all = await vs.scrapeAllXSKT(null, region);
+      const slug = vs.resolveXsktScrapeDateSlug(null, region);
+      const all = await vs.scrapeAllXSKT(slug, region);
       const keys = Object.keys(all);
       console.log('[xskt]', region, keys.length, 'đài');
       for (const [dai, row] of Object.entries(all)) {
