@@ -34,6 +34,70 @@ function toViDate(d) {
   const yyyy = d.getFullYear();
   return dd + '/' + mm + '/' + yyyy;
 }
+
+const VIETNAM_TZ = 'Asia/Ho_Chi_Minh';
+/** Lotto 5/35 quay ~18:00 (giờ VN). */
+const LOTTO535_DRAW_HOUR = 18;
+
+function getVietnamNowParts() {
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: VIETNAM_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(new Date());
+  const pick = (t) => parts.find((p) => p.type === t)?.value || '';
+  return {
+    y: parseInt(pick('year'), 10),
+    m: parseInt(pick('month'), 10),
+    d: parseInt(pick('day'), 10),
+    hour: parseInt(pick('hour'), 10),
+  };
+}
+
+function viDateFromYmd(y, m, d) {
+  return String(d).padStart(2, '0') + '/' + String(m).padStart(2, '0') + '/' + y;
+}
+
+function isValidViDrawDate(s) {
+  return /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(String(s || '').trim());
+}
+
+function addCalendarDaysVi(anchorDateVi, deltaDays) {
+  const parts = String(anchorDateVi || '')
+    .trim()
+    .match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!parts) return '';
+  const dt = new Date(parseInt(parts[3], 10), parseInt(parts[2], 10) - 1, parseInt(parts[1], 10));
+  if (Number.isNaN(dt.getTime())) return '';
+  dt.setDate(dt.getDate() + deltaDays);
+  return viDateFromYmd(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
+}
+
+/** Lotto 5/35: mỗi kỳ ≈ 1 ngày lịch (quay hàng ngày). */
+function inferLotto535DrawDateFromKy(kyStr, anchorKyStr, anchorDateVi) {
+  const k = parseInt(String(kyStr || '').replace(/\D/g, ''), 10);
+  const anchorK = parseInt(String(anchorKyStr || '').replace(/\D/g, ''), 10);
+  if (!Number.isFinite(k) || !Number.isFinite(anchorK) || !isValidViDrawDate(anchorDateVi)) {
+    return '';
+  }
+  return addCalendarDaysVi(anchorDateVi, k - anchorK);
+}
+
+function finalizeLotto535DrawDate(product, kyStr, data, info) {
+  if (product !== 'lotto535' || !data) return data;
+  if (isValidViDrawDate(data.drawDate)) return data;
+  const inferred = inferLotto535DrawDateFromKy(
+    kyStr || data.kySo,
+    info && info.currentKy,
+    info && info.currentDate
+  );
+  if (inferred) data.drawDate = inferred;
+  return data;
+}
 function toSlugDate(d) {
   const dd = String(d.getDate()).padStart(2, '0');
   const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -508,16 +572,12 @@ async function getCurrentInfo(product, opts) {
     // ketquadientoan (getCurrentInfo): đã tắt — khôi phục từ git nếu cần.
 
     if (product === 'lotto535') {
-      const now = new Date();
-      const hour = now.getHours();
-      // Nếu chưa đến 13h hôm nay → currentDate là hôm qua
-      if (hour < 13) {
-        const yesterday = new Date(now);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const dd = String(yesterday.getDate()).padStart(2, '0');
-        const mm = String(yesterday.getMonth() + 1).padStart(2, '0');
-        const yyyy = yesterday.getFullYear();
-        currentDate = dd + '/' + mm + '/' + yyyy;
+      const vn = getVietnamNowParts();
+      const todayVi = viDateFromYmd(vn.y, vn.m, vn.d);
+      // Giữ ngày từ listing vietlott khi đã parse được; chỉ ước lượng khi thiếu.
+      if (!isValidViDrawDate(currentDate)) {
+        currentDate =
+          vn.hour < LOTTO535_DRAW_HOUR ? addCalendarDaysVi(todayVi, -1) : todayVi;
       }
     }
 
@@ -745,7 +805,27 @@ function parseOfficialMax3DFromVietlott($, isPro) {
   return { sets, kySo, drawDate };
 }
 
-function parseOfficialMegaPowerL535FromVietlott($, product) {
+function parseMegaPowerL535DateFromTable($, kysoTarget) {
+  const hint = kysoTarget != null ? String(kysoTarget).replace(/\D/g, '') : '';
+  let found = '';
+  $('table tbody tr, table.table-result-info tbody tr').each((_, tr) => {
+    const tds = $(tr).find('td');
+    if (tds.length < 2) return;
+    const t0 = (tds.eq(0).text() || '').replace(/\s+/g, ' ');
+    const t1 = (tds.eq(1).text() || '').replace(/\s+/g, ' ');
+    const dateMatch = t0.match(/(\d{2}\/\d{2}\/\d{4})/) || t1.match(/(\d{2}\/\d{2}\/\d{4})/);
+    if (!dateMatch) return;
+    const kyFromHash = (t1.match(/#\s*(\d+)/) || t0.match(/#\s*(\d+)/) || [])[1];
+    const kyLong = (t1.match(/(\d{5,})/) || t0.match(/(\d{5,})/) || [])[1];
+    const rowKy = kyFromHash || kyLong || '';
+    if (hint && rowKy && String(rowKy).replace(/\D/g, '') !== hint) return;
+    found = dateMatch[1];
+    return false;
+  });
+  return found;
+}
+
+function parseOfficialMegaPowerL535FromVietlott($, product, kysoTarget) {
   const left = $('#divLeftContent');
   const area = left.length ? left : $('body');
   const box = area.find('div.day_so_ket_qua_v2').first();
@@ -760,7 +840,12 @@ function parseOfficialMegaPowerL535FromVietlott($, product) {
   });
 
   const blob = String($('body').text() || '').replace(/\s+/g, ' ');
-  let { kySo, drawDate } = extractKyAndDateFromText(blob);
+  let { kySo, drawDate } = extractKyAndDateFromText(blob, kysoTarget);
+  if (product === 'lotto535' && !isValidViDrawDate(drawDate)) {
+    const fromTable = parseMegaPowerL535DateFromTable($, kysoTarget || kySo);
+    if (fromTable) drawDate = fromTable;
+  }
+  if (kysoTarget && !kySo) kySo = String(kysoTarget).replace(/\D/g, '');
 
   if (product === 'mega') {
     if (items.length === 6) {
@@ -950,7 +1035,7 @@ function parseVietlottOfficialHtml($, product, kysoTarget) {
     if (product === 'max3dpro') return parseOfficialMax3DFromVietlott($, true);
     if (product === 'keno') return parseOfficialKenoFromVietlott($, kysoTarget);
     if (product === 'mega' || product === 'power' || product === 'lotto535') {
-      return parseOfficialMegaPowerL535FromVietlott($, product);
+      return parseOfficialMegaPowerL535FromVietlott($, product, kysoTarget);
     }
   } catch (e) {
     console.log('[parseVietlottOfficialHtml]', e.message);
@@ -989,15 +1074,25 @@ async function saveVietlottToSupabase(product, kyso, data) {
   if (!supabase) return;
   const key = padVietlottId(product, kyso || data.kySo || '');
   if (!key) return;
+  let payload = data;
+  if (product === 'lotto535') {
+    payload = Object.assign({}, data);
+    const infoCached = cache['current_lotto535'];
+    const info =
+      infoCached && Date.now() - infoCached.timestamp < 60 * 60 * 1000
+        ? infoCached.data
+        : await getCurrentInfo('lotto535');
+    finalizeLotto535DrawDate(product, key, payload, info);
+  }
   try {
     const { error } = await supabase.from('vietlott_results').upsert(
       {
         product,
         kyso: key,
-        draw_date: normalizeDrawDateForSupabase(data.drawDate || ''),
-        numbers: data.numbers || [],
-        power_number: data.powerNumber || null,
-        sets: data.sets || null,
+        draw_date: normalizeDrawDateForSupabase(payload.drawDate || ''),
+        numbers: payload.numbers || [],
+        power_number: payload.powerNumber || null,
+        sets: payload.sets || null,
       },
       { onConflict: 'product,kyso' }
     );
@@ -2699,6 +2794,19 @@ async function backfillVietlottMonthsToSupabase(months, options) {
             (Array.isArray(had.sets) && had.sets.length > 0));
         if (filled) {
           by.skipped++;
+          if (product === 'lotto535' && info.currentKy && info.currentDate) {
+            const expected = inferLotto535DrawDateFromKy(kyStr, info.currentKy, info.currentDate);
+            const got = drawDateFromPg(had.draw_date);
+            if (expected && got !== expected) {
+              await saveVietlottToSupabase(product, kyStr, {
+                numbers: had.numbers || [],
+                powerNumber: had.power_number,
+                sets: had.sets,
+                kySo: kyStr,
+                drawDate: expected,
+              });
+            }
+          }
           continue;
         }
         try {

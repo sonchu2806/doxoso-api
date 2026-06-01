@@ -766,7 +766,7 @@ if (process.env.VIETLOTT_WARM_ON_BOOT !== '0') {
   if (supabase && process.env.VIETLOTT_BOOT_LOTTO535_DAYS !== '0') {
     const lottoBootDays = Math.min(
       120,
-      Math.max(0, parseInt(process.env.VIETLOTT_BOOT_LOTTO535_DAYS || '15', 10) || 15)
+      Math.max(0, parseInt(process.env.VIETLOTT_BOOT_LOTTO535_DAYS || '30', 10) || 30)
     );
     if (lottoBootDays > 0) {
       const lottoMs = bootMs + 45000;
