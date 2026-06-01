@@ -2156,6 +2156,38 @@ function extractMinhNgocDrawDateFromCheerio($, urlSlug) {
 const MINH_NGOC_XSKT_TABLE_SEL =
   'table.bkqmiennam, table.bkqtmiennam, table.bkqmientrung, table[class*="bkq"], table.bangketquaSo';
 
+/** Độ dài mỗi số trúng theo giải (MN/MT); MB dùng bảng khác. */
+function xsktDigitsLenFromPrizeClass(cls) {
+  const c = String(cls || '').toLowerCase();
+  if (c.includes('giaidb')) return 6;
+  if (c.includes('giai8')) return 2;
+  if (c.includes('giai7')) return 3;
+  if (c.includes('giai5') || c.includes('giai6')) return 4;
+  if (c.includes('giai1') || c.includes('giai2') || c.includes('giai3') || c.includes('giai4')) {
+    return 5;
+  }
+  return null;
+}
+
+function splitConcatenatedXsktDigits(raw, preferredLen) {
+  const s = String(raw || '').replace(/\D/g, '');
+  if (!s) return [];
+  const tryLens = [];
+  if (preferredLen) tryLens.push(preferredLen);
+  for (const len of [5, 4, 6, 3, 2]) {
+    if (!tryLens.includes(len)) tryLens.push(len);
+  }
+  for (const len of tryLens) {
+    if (s.length < len || s.length % len !== 0) continue;
+    const count = s.length / len;
+    if (count < 1 || count > 30) continue;
+    const out = [];
+    for (let i = 0; i < s.length; i += len) out.push(s.slice(i, i + len));
+    return out;
+  }
+  return s.length >= 2 ? [s] : [];
+}
+
 function parseAllXSKTByCheerio(html, urlSlug) {
   const $ = cheerio.load(html);
   const drawDateFromHtml = extractMinhNgocDrawDateFromCheerio($, urlSlug);
@@ -2174,18 +2206,23 @@ function parseAllXSKTByCheerio(html, urlSlug) {
     return String(raw || '').trim() || 'Giải';
   };
 
-  const extractNumbers = ($cell) => {
+  const extractNumbers = ($cell, clsHint) => {
     const byNode = $cell
       .find('div.giaiSo, span.giaiSo, b, strong')
       .map((_, el) => ($(el).text() || '').trim().replace(/\D/g, ''))
       .get()
       .filter((n) => n.length >= 2);
-    if (byNode.length > 0) return byNode;
+    if (byNode.length > 1) return byNode;
+    if (byNode.length === 1) {
+      const pref = xsktDigitsLenFromPrizeClass(clsHint);
+      const expanded = splitConcatenatedXsktDigits(byNode[0], pref);
+      if (expanded.length > 0) return expanded;
+    }
     const raw = ($cell.text() || '').replace(/\D/g, '');
-    if (raw.length >= 8 && raw.length % 4 === 0) {
-      const chunks = [];
-      for (let i = 0; i < raw.length; i += 4) chunks.push(raw.slice(i, i + 4));
-      if (chunks.length) return chunks;
+    if (raw) {
+      const pref = xsktDigitsLenFromPrizeClass(clsHint);
+      const split = splitConcatenatedXsktDigits(raw, pref);
+      if (split.length > 0) return split;
     }
     return ($cell.text() || '')
       .split(/\s+/)
@@ -2227,7 +2264,7 @@ function parseAllXSKTByCheerio(html, urlSlug) {
         if (!/(giaidb|giai\d)/.test(cls) || cls.includes('giai_tinh') || cls.includes('giai_text')) {
           return;
         }
-        const nums = extractNumbers($c);
+        const nums = extractNumbers($c, cls);
         if (nums.length === 0) return;
         const prizeLabel = normalizePrizeLabel($c.text(), cls);
         prizes.push({ label: prizeLabel, numbers: nums });
@@ -2284,7 +2321,8 @@ function parseAllXSKTByCheerio(html, urlSlug) {
 
       const prizeLabel = normalizePrizeLabel(rawLabel, className + ' ' + String($(prizeCells[0]).attr('class') || '').toLowerCase());
       for (let i = 0; i < provinceNames.length; i++) {
-        const nums = extractNumbers($(prizeCells[i]));
+        const cellCls = String($(prizeCells[i]).attr('class') || '').toLowerCase();
+        const nums = extractNumbers($(prizeCells[i]), cellCls + ' ' + className);
         if (nums.length === 0) continue;
         provincePrizes[i].push({ label: prizeLabel, numbers: nums });
         if (prizeLabel === 'Giải đặc biệt' && !specialByProvince[i]) {
@@ -2351,11 +2389,19 @@ function parseMienBacMinhNgocByCheerio(html) {
   for (const [cls, label] of rowDefs) {
     const cell = firstBox.find(`td.${cls}`).first();
     if (!cell.length) continue;
-    const nums = cell
+    let nums = cell
       .find('div')
       .map((_, el) => ($(el).text() || '').trim().replace(/\D/g, ''))
       .get()
       .filter((n) => n.length >= 2);
+    if (nums.length === 1) {
+      const pref = xsktDigitsLenFromPrizeClass(cls);
+      nums = splitConcatenatedXsktDigits(nums[0], pref);
+    }
+    if (nums.length === 0) {
+      const raw = (cell.text() || '').replace(/\D/g, '');
+      nums = splitConcatenatedXsktDigits(raw, xsktDigitsLenFromPrizeClass(cls));
+    }
     if (nums.length === 0) continue;
     prizes.push({ label, numbers: nums });
     if (label === 'Giải đặc biệt' && nums[0]) specialPrize = nums[0];

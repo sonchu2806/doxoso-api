@@ -869,6 +869,39 @@
     return t;
   }
 
+  function xsktDigitsPerPrizeLabel(label) {
+    var l = stripViAccents(label);
+    if (l.indexOf('dac biet') !== -1) return 6;
+    if (l.indexOf('tam') !== -1 || l.indexOf('giai 8') !== -1) return 2;
+    if (l.indexOf('bay') !== -1 || l.indexOf('giai 7') !== -1) return 3;
+    if (l.indexOf('nam') !== -1 || l.indexOf('giai 5') !== -1 || l.indexOf('sau') !== -1 || l.indexOf('giai 6') !== -1) {
+      return 4;
+    }
+    if (l.indexOf('nhat') !== -1 || l.indexOf('nhi') !== -1 || l.indexOf('ba') !== -1 || l.indexOf('tu') !== -1) {
+      return 5;
+    }
+    return 6;
+  }
+
+  /** Tách chuỗi số dính (giải ba 2×5, giải tư 7×5) khi scrape/DB chỉ có một phần tử. */
+  function expandXsktPrizeNumbers(label, numbers) {
+    var len = xsktDigitsPerPrizeLabel(label);
+    var arr = (numbers || []).map(function (n) {
+      return String(n).trim();
+    }).filter(Boolean);
+    var flat = [];
+    arr.forEach(function (item) {
+      var raw = item.replace(/\D/g, '');
+      if (!raw) return;
+      if (raw.length > len && raw.length % len === 0 && raw.length / len <= 30) {
+        for (var i = 0; i < raw.length; i += len) flat.push(raw.slice(i, i + len));
+      } else {
+        flat.push(raw);
+      }
+    });
+    return flat;
+  }
+
   function checkXSKTTicket(ticketNumber, result) {
     var ticket = String(ticketNumber || '').replace(/\D/g, '');
     if (!ticket) return { matched: false, prize: '', amount: 0 };
@@ -892,7 +925,7 @@
       var meta = getPrizeMeta(p.label || '');
       var digits = meta.digits;
       var rank = meta.rank;
-      (p.numbers || []).forEach(function (num) {
+      expandXsktPrizeNumbers(p.label || '', p.numbers).forEach(function (num) {
         var win = String(num || '').replace(/\D/g, '');
         if (!win) return;
         var tailLen = Math.min(digits, ticket.length, win.length);
@@ -1644,7 +1677,7 @@
         '</span><span style="font-weight:700;text-align:right;flex:1;font-size:13px;color:' +
         (win ? '#11845B' : '#303233') +
         '">' +
-        (p.numbers || [])
+        expandXsktPrizeNumbers(p.label, p.numbers)
           .map(function (num) {
             var n = String(num).trim();
             return n === String(state.xsktTicket).trim() ? '★' + escapeHtml(n) + '★' : escapeHtml(n);
