@@ -54,8 +54,12 @@
   </table>
   <button type="button" class="ghost" id="btn-refresh-latest">Làm mới bảng (Supabase)</button>
 
-  <h2 class="panel-title" style="margin-top:16px">Forward-fill (kèm mỗi lần đồng bộ Vietlott)</h2>
-  <p class="panel-hint">Từ kỳ lớn nhất trong Supabase, dò T+1, T+2… trước khi lấy kỳ hiện tại. Log <code>đạt trần maxAhead=48</code> → tăng số dưới (Keno thường 120–200).</p>
+  <h2 class="panel-title" style="margin-top:16px">Forward-fill + backfill ngày</h2>
+  <p class="panel-hint">
+    <strong>Đồng bộ đầy đủ / Chỉ Vietlott</strong> chạy chế độ <strong>sâu</strong>: forward-fill T+1… rồi lùi lấp kỳ thiếu —
+    Mega/Power/Max3D ~120 ngày, Lotto 5/35 ~60 ngày, Keno ~7 ngày (có thể chỉnh qua <code>LOCAL_BRIDGE_BACKFILL_DAYS_*</code> trong .env).
+    Có thể mất <strong>10–40 phút</strong>; giữ cửa sổ bridge mở.
+  </p>
   <p>
     <label for="maxAhead">maxAhead (bước T+1…, tối đa 500)</label>
     <input type="number" id="maxAhead" min="1" max="500" value="120" />
@@ -67,8 +71,9 @@
     <div class="xskt-mini" id="xskt-latest"></div>
   </div>
 
-  <button type="button" class="primary" id="btn-full">Đồng bộ đầy đủ (Vietlott + XSKT 3 miền)</button>
-  <button type="button" class="secondary" id="btn-vl">Chỉ Vietlott (mọi game)</button>
+  <button type="button" class="primary" id="btn-full">Đồng bộ đầy đủ — sâu (Vietlott lấp kỳ thiếu + XSKT)</button>
+  <button type="button" class="secondary" id="btn-vl">Chỉ Vietlott — sâu (lấp kỳ thiếu)</button>
+  <button type="button" class="ghost" id="btn-vl-quick">Vietlott nhanh (chỉ kỳ mới + forward-fill)</button>
   <button type="button" class="secondary" id="btn-xskt">Chỉ XSKT (mb, mt, mn)</button>
 
   <p id="status" style="color:#666;font-size:14px"></p>
@@ -278,11 +283,19 @@
       return JSON.stringify({ maxAhead: max });
     }
 
-    function post(path) {
-      statusEl.textContent = 'Đang chạy… (có thể vài phút)';
+    function post(path, bodyExtra) {
+      statusEl.textContent = 'Đang chạy… (có thể vài phút — chế độ sâu lâu hơn)';
       out.textContent = '…';
       xsktWrap.style.display = 'none';
-      fetch(path, { method: 'POST', headers: headers(), body: syncBody() })
+      var body = syncBody();
+      if (bodyExtra && typeof bodyExtra === 'object') {
+        try {
+          var o = JSON.parse(body);
+          Object.assign(o, bodyExtra);
+          body = JSON.stringify(o);
+        } catch (e) {}
+      }
+      fetch(path, { method: 'POST', headers: headers(), body: body })
         .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
         .then(function (x) {
           statusEl.textContent = x.ok ? 'Xong.' : 'Lỗi HTTP';
@@ -300,7 +313,8 @@
     }
 
     document.getElementById('btn-full').onclick = function () { post('/api/sync/full'); };
-    document.getElementById('btn-vl').onclick = function () { post('/api/sync/vietlott'); };
+    document.getElementById('btn-vl').onclick = function () { post('/api/sync/vietlott-deep'); };
+    document.getElementById('btn-vl-quick').onclick = function () { post('/api/sync/vietlott'); };
     document.getElementById('btn-xskt').onclick = function () { post('/api/sync/xskt'); };
     document.getElementById('btn-refresh-latest').onclick = function () { loadLatestFromSupabase(); };
 

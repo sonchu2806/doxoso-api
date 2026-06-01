@@ -77,20 +77,78 @@ function addCalendarDaysVi(anchorDateVi, deltaDays) {
   return viDateFromYmd(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
 }
 
-/** Lotto 5/35: mỗi kỳ ≈ 1 ngày lịch (quay hàng ngày). */
-function inferLotto535DrawDateFromKy(kyStr, anchorKyStr, anchorDateVi) {
-  const k = parseInt(String(kyStr || '').replace(/\D/g, ''), 10);
-  const anchorK = parseInt(String(anchorKyStr || '').replace(/\D/g, ''), 10);
-  if (!Number.isFinite(k) || !Number.isFinite(anchorK) || !isValidViDrawDate(anchorDateVi)) {
-    return '';
-  }
-  return addCalendarDaysVi(anchorDateVi, k - anchorK);
+function viDateToLocalDate(drawDateVi) {
+  const parts = String(drawDateVi || '')
+    .trim()
+    .match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!parts) return null;
+  const dt = new Date(parseInt(parts[3], 10), parseInt(parts[2], 10) - 1, parseInt(parts[1], 10));
+  return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
-function finalizeLotto535DrawDate(product, kyStr, data, info) {
-  if (product !== 'lotto535' || !data) return data;
+/** Ngày quay mới nhất đã công bố (giờ VN, theo DRAW_DAYS). */
+function getLatestPublishedDrawDateVi(product) {
+  const drawDays = DRAW_DAYS[product];
+  if (!drawDays || !drawDays.length) return '';
+  const vn = getVietnamNowParts();
+  if (product === 'keno') return viDateFromYmd(vn.y, vn.m, vn.d);
+  const drawHour = product === 'lotto535' ? LOTTO535_DRAW_HOUR : 18;
+  let dt = new Date(vn.y, vn.m - 1, vn.d);
+  for (let i = 0; i < 14; i++) {
+    const dow = dt.getDay();
+    const afterDraw = i === 0 ? vn.hour >= drawHour : true;
+    if (drawDays.includes(dow) && afterDraw) {
+      return viDateFromYmd(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
+    }
+    dt.setDate(dt.getDate() - 1);
+  }
+  return '';
+}
+
+/** Suy ngày quay từ neo (kỳ hiện tại + ngày) và lịch DRAW_DAYS. */
+function inferDrawDateFromKyBySchedule(product, kyStr, anchorKyStr, anchorDateVi) {
+  const drawDays = DRAW_DAYS[product];
+  if (!drawDays || !drawDays.length || !isValidViDrawDate(anchorDateVi)) return '';
+  const k = parseInt(String(kyStr || '').replace(/\D/g, ''), 10);
+  const anchorK = parseInt(String(anchorKyStr || '').replace(/\D/g, ''), 10);
+  if (!Number.isFinite(k) || !Number.isFinite(anchorK)) return '';
+
+  let dt = viDateToLocalDate(anchorDateVi);
+  if (!dt) return '';
+  if (!drawDays.includes(dt.getDay())) {
+    let guard = 0;
+    while (!drawDays.includes(dt.getDay()) && guard++ < 14) {
+      dt.setDate(dt.getDate() - 1);
+    }
+  }
+
+  let ky = anchorK;
+  while (ky > k) {
+    do {
+      dt.setDate(dt.getDate() - 1);
+    } while (!drawDays.includes(dt.getDay()));
+    ky--;
+  }
+  while (ky < k) {
+    do {
+      dt.setDate(dt.getDate() + 1);
+    } while (!drawDays.includes(dt.getDay()));
+    ky++;
+  }
+  return viDateFromYmd(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
+}
+
+function inferLotto535DrawDateFromKy(kyStr, anchorKyStr, anchorDateVi) {
+  return inferDrawDateFromKyBySchedule('lotto535', kyStr, anchorKyStr, anchorDateVi);
+}
+
+function finalizeVietlottDrawDate(product, kyStr, data, info) {
+  if (!data || !DRAW_DAYS[product]) return data;
+  // Keno: nhiều kỳ mỗi ngày — chỉ tin ngày parse từ HTML, không suy theo chênh số kỳ.
+  if (product === 'keno') return data;
   if (isValidViDrawDate(data.drawDate)) return data;
-  const inferred = inferLotto535DrawDateFromKy(
+  const inferred = inferDrawDateFromKyBySchedule(
+    product,
     kyStr || data.kySo,
     info && info.currentKy,
     info && info.currentDate
@@ -571,14 +629,9 @@ async function getCurrentInfo(product, opts) {
 
     // ketquadientoan (getCurrentInfo): đã tắt — khôi phục từ git nếu cần.
 
-    if (product === 'lotto535') {
-      const vn = getVietnamNowParts();
-      const todayVi = viDateFromYmd(vn.y, vn.m, vn.d);
-      // Giữ ngày từ listing vietlott khi đã parse được; chỉ ước lượng khi thiếu.
-      if (!isValidViDrawDate(currentDate)) {
-        currentDate =
-          vn.hour < LOTTO535_DRAW_HOUR ? addCalendarDaysVi(todayVi, -1) : todayVi;
-      }
+    // Giữ ngày scrape từ listing; chỉ ước lượng theo lịch quay VN khi thiếu.
+    if (!isValidViDrawDate(currentDate) && DRAW_DAYS[product]) {
+      currentDate = getLatestPublishedDrawDateVi(product);
     }
 
     const info = { currentKy, currentDate };
@@ -704,7 +757,7 @@ function extractKyAndDateFromText(blob, kyHint) {
   return { kySo, drawDate };
 }
 
-function parseOfficialMax3DFromVietlott($, isPro) {
+function parseOfficialMax3DFromVietlott($, isPro, kysoTarget) {
   let wrap = $();
   let table = $();
 
@@ -801,7 +854,7 @@ function parseOfficialMax3DFromVietlott($, isPro) {
   });
   if (sets.length === 0) return null;
   const blob = wrap.text() + ' ' + $('body').text();
-  const { kySo, drawDate } = extractKyAndDateFromText(blob);
+  const { kySo, drawDate } = extractKyAndDateFromText(blob, kysoTarget);
   return { sets, kySo, drawDate };
 }
 
@@ -1031,8 +1084,8 @@ async function tryParseKenoCurrentFromPuppeteerPage(page) {
 
 function parseVietlottOfficialHtml($, product, kysoTarget) {
   try {
-    if (product === 'max3d') return parseOfficialMax3DFromVietlott($, false);
-    if (product === 'max3dpro') return parseOfficialMax3DFromVietlott($, true);
+    if (product === 'max3d') return parseOfficialMax3DFromVietlott($, false, kysoTarget);
+    if (product === 'max3dpro') return parseOfficialMax3DFromVietlott($, true, kysoTarget);
     if (product === 'keno') return parseOfficialKenoFromVietlott($, kysoTarget);
     if (product === 'mega' || product === 'power' || product === 'lotto535') {
       return parseOfficialMegaPowerL535FromVietlott($, product, kysoTarget);
@@ -1075,14 +1128,15 @@ async function saveVietlottToSupabase(product, kyso, data) {
   const key = padVietlottId(product, kyso || data.kySo || '');
   if (!key) return;
   let payload = data;
-  if (product === 'lotto535') {
+  if (DRAW_DAYS[product]) {
     payload = Object.assign({}, data);
-    const infoCached = cache['current_lotto535'];
+    const ck = 'current_' + product;
+    const infoCached = cache[ck];
     const info =
       infoCached && Date.now() - infoCached.timestamp < 60 * 60 * 1000
         ? infoCached.data
-        : await getCurrentInfo('lotto535');
-    finalizeLotto535DrawDate(product, key, payload, info);
+        : await getCurrentInfo(product);
+    finalizeVietlottDrawDate(product, key, payload, info);
   }
   try {
     const { error } = await supabase.from('vietlott_results').upsert(
@@ -1578,8 +1632,13 @@ async function scrapeVietlott(product, kyso, opts) {
     if ((product === 'max3d' || product === 'max3dpro') && !axiosResult.drawDate) {
       const m = url.match(/\/(\d{2})-(\d{2})-(\d{4})\.html/);
       if (m) axiosResult.drawDate = m[1] + '/' + m[2] + '/' + m[3];
-      if (!axiosResult.drawDate && String(url).includes('vietlott.vn')) {
-        axiosResult.drawDate = toViDate(new Date());
+      if (!axiosResult.drawDate && kyso) {
+        const info3d = cache['current_' + product];
+        const info =
+          info3d && Date.now() - info3d.timestamp < 60 * 60 * 1000
+            ? info3d.data
+            : await getCurrentInfo(product);
+        finalizeVietlottDrawDate(product, kyso, axiosResult, info);
       }
     }
     const rowKy = padVietlottId(product, axiosResult.kySo || kyso || '');
@@ -2794,8 +2853,13 @@ async function backfillVietlottMonthsToSupabase(months, options) {
             (Array.isArray(had.sets) && had.sets.length > 0));
         if (filled) {
           by.skipped++;
-          if (product === 'lotto535' && info.currentKy && info.currentDate) {
-            const expected = inferLotto535DrawDateFromKy(kyStr, info.currentKy, info.currentDate);
+          if (product !== 'keno' && info.currentKy && info.currentDate) {
+            const expected = inferDrawDateFromKyBySchedule(
+              product,
+              kyStr,
+              info.currentKy,
+              info.currentDate
+            );
             const got = drawDateFromPg(had.draw_date);
             if (expected && got !== expected) {
               await saveVietlottToSupabase(product, kyStr, {
@@ -2805,6 +2869,7 @@ async function backfillVietlottMonthsToSupabase(months, options) {
                 kySo: kyStr,
                 drawDate: expected,
               });
+              by.repaired = (by.repaired || 0) + 1;
             }
           }
           continue;

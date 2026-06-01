@@ -7,7 +7,7 @@
  * hoặc: npm run local-bridge
  *
  * Mở trình duyệt: http://127.0.0.1:3847/  (PC)
- * Cùng WiFi, điện thoại: http://<IP-LAN-máy>:3847/  (ví dụ http://192.168.1.10:3847/)
+ * Cùng WiFi, điện thoại: http://<IP-LAN-máy>:3847/
  *
  * Cần .env: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (hoặc ANON nếu RLS cho phép upsert).
  * Tùy chọn: LOCAL_BRIDGE_TOKEN — bắt buộc header x-bridge-token khi gọi API.
@@ -34,18 +34,42 @@ const {
   saveXSKTToSupabase,
   normalizeDrawDateForSupabase,
   getLatestVietlottFromSupabase,
+  backfillVietlottMonthsToSupabase,
 } = vs;
 
 const PORT = Math.max(1024, Math.min(65535, parseInt(process.env.LOCAL_BRIDGE_PORT || '3847', 10)));
 const HOST = process.env.LOCAL_BRIDGE_HOST || '0.0.0.0';
 const BRIDGE_TOKEN = String(process.env.LOCAL_BRIDGE_TOKEN || '').trim();
 
+/** Sản phẩm ít kỳ: lùi đủ ngày để lấp kỳ thiếu. Keno: ~7 ngày (~130 kỳ/ngày). */
+const DEFAULT_BACKFILL_DAYS = {
+  mega: 120,
+  power: 120,
+  max3d: 120,
+  max3dpro: 120,
+  lotto535: 60,
+  keno: 7,
+};
+
+function backfillDaysForProduct(product) {
+  const envKey = 'LOCAL_BRIDGE_BACKFILL_DAYS_' + product.toUpperCase();
+  const raw = process.env[envKey] || process.env.LOCAL_BRIDGE_BACKFILL_DAYS || '';
+  const perProduct = parseInt(String(process.env[envKey] || DEFAULT_BACKFILL_DAYS[product] || ''), 10);
+  if (Number.isFinite(perProduct) && perProduct >= 0) return perProduct;
+  const global = parseInt(String(raw), 10);
+  if (Number.isFinite(global) && global >= 0) return global;
+  return DEFAULT_BACKFILL_DAYS[product] != null ? DEFAULT_BACKFILL_DAYS[product] : 30;
+}
+
 function bridgeAuth(req, res, next) {
   if (!BRIDGE_TOKEN) return next();
   const h = String(req.headers['x-bridge-token'] || req.headers.authorization || '').trim();
   const bearer = h.startsWith('Bearer ') ? h.slice(7).trim() : h;
   if (bearer !== BRIDGE_TOKEN) {
-    return res.status(401).json({ success: false, error: 'Sai hoặc thiếu x-bridge-token (đặt LOCAL_BRIDGE_TOKEN trong .env).' });
+    return res.status(401).json({
+      success: false,
+      error: 'Sai hoặc thiếu x-bridge-token (đặt LOCAL_BRIDGE_TOKEN trong .env).',
+    });
   }
   next();
 }
@@ -80,28 +104,81 @@ function forwardFillOptsFromBody(body) {
   return opts;
 }
 
-async function syncVietlottAll(body) {
+function delayMsFromBody(body) {
+  const src = body && typeof body === 'object' ? body : {};
+  const raw = parseInt(String(src.backfillDelayMs != null ? src.backfillDelayMs : ''), 10);
+  if (Number.isFinite(raw) && raw >= 100) return Math.min(2500, raw);
+  return Math.max(200, parseInt(process.env.LOCAL_BRIDGE_BACKFILL_DELAY_MS || '400', 10));
+}
+
+/**
+ * Kỳ hiện tại + forward-fill, rồi backfill lùi theo ngày (ưu tiên kỳ thiếu trong Supabase).
+ */
+async function syncVietlottProductDeep(product, body) {
   const forwardFill = forwardFillOptsFromBody(body);
+  const days = backfillDaysForProduct(product);
+  const out = { product, days, current: null, backfill: null };
+
+  const opts = {
+    forceNetwork: true,
+    forwardFillFromSupabase: true,
+    forwardFill,
+  };
+  const data = await scrapeVietlott(product, null, opts);
+  const picked = pickKyDrawFromScrape(data);
+  out.current = {
+    ok: true,
+    kySo: picked.kySo,
+    drawDate: picked.drawDate,
+    hasPayload: picked.hasPayload,
+    forwardFill: opts._forwardFillSummary || null,
+  };
+
+  if (days > 0) {
+    const bfOpts = {
+      products: [product],
+      days,
+      delayMs: delayMsFromBody(body),
+    };
+    if (product === 'keno') bfOpts.kenoDays = days;
+    const stats = await backfillVietlottMonthsToSupabase(1, bfOpts);
+    out.backfill = stats.byProduct && stats.byProduct[product] ? stats.byProduct[product] : null;
+  }
+
+  return out;
+}
+
+async function syncVietlottAll(body, deep) {
   const results = {};
-  for (const product of VIETLOTT_PRODUCT_IDS) {
+  const order = deep
+    ? ['mega', 'power', 'max3d', 'max3dpro', 'lotto535', 'keno']
+    : VIETLOTT_PRODUCT_IDS;
+  for (const product of order) {
     try {
-      const opts = {
-        forceNetwork: true,
-        forwardFillFromSupabase: true,
-        forwardFill,
-      };
-      const data = await scrapeVietlott(product, null, opts);
-      const picked = pickKyDrawFromScrape(data);
-      results[product] = {
-        ok: true,
-        kySo: picked.kySo,
-        drawDate: picked.drawDate,
-        hasPayload: picked.hasPayload,
-        forwardFill: opts._forwardFillSummary || null,
-      };
+      if (deep) {
+        results[product] = await syncVietlottProductDeep(product, body);
+        results[product].ok = true;
+      } else {
+        const forwardFill = forwardFillOptsFromBody(body);
+        const opts = {
+          forceNetwork: true,
+          forwardFillFromSupabase: true,
+          forwardFill,
+        };
+        const data = await scrapeVietlott(product, null, opts);
+        const picked = pickKyDrawFromScrape(data);
+        results[product] = {
+          ok: true,
+          kySo: picked.kySo,
+          drawDate: picked.drawDate,
+          hasPayload: picked.hasPayload,
+          forwardFill: opts._forwardFillSummary || null,
+        };
+      }
     } catch (e) {
       results[product] = { ok: false, error: e.message };
     }
+    await new Promise((r) => setTimeout(r, 300));
   }
   return results;
 }
@@ -140,17 +217,24 @@ app.use(express.json({ limit: '2mb' }));
 const staticDir = path.join(__dirname, 'local-bridge-static');
 
 app.get('/api/health', (_req, res) => {
-  const hasSb = !!(process.env.SUPABASE_URL && (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY));
+  const hasSb = !!(
+    process.env.SUPABASE_URL &&
+    (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY)
+  );
+  const backfillDays = {};
+  for (const p of VIETLOTT_PRODUCT_IDS) {
+    backfillDays[p] = backfillDaysForProduct(p);
+  }
   res.json({
     success: true,
     role: 'local-bridge',
     supabaseConfigured: hasSb,
     authRequired: !!BRIDGE_TOKEN,
+    backfillDays,
     hint: 'Scrape chạy trên máy này (IP của bạn), rồi ghi Supabase.',
   });
 });
 
-/** Kỳ / ngày mới nhất đang lưu trong Supabase (để đối chiếu sau sync). */
 app.get('/api/status/latest', bridgeAuth, async (_req, res) => {
   try {
     const vietlott = {};
@@ -169,8 +253,22 @@ app.get('/api/status/latest', bridgeAuth, async (_req, res) => {
 app.post('/api/sync/vietlott', bridgeAuth, async (req, res) => {
   try {
     const forwardFill = forwardFillOptsFromBody(req.body);
-    const results = await syncVietlottAll(req.body);
+    const results = await syncVietlottAll(req.body, false);
     res.json({ success: true, forwardFill, results });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+/** Lấp toàn bộ kỳ/ngày còn thiếu (Mega/Power/Max3D/Lotto ~60–120 ngày; Keno ~7 ngày). */
+app.post('/api/sync/vietlott-deep', bridgeAuth, async (req, res) => {
+  try {
+    const forwardFill = forwardFillOptsFromBody(req.body);
+    const startedAt = new Date().toISOString();
+    console.log('[local-bridge] vietlott-deep bắt đầu', startedAt);
+    const results = await syncVietlottAll(req.body, true);
+    console.log('[local-bridge] vietlott-deep xong', new Date().toISOString());
+    res.json({ success: true, mode: 'deep', forwardFill, startedAt, finishedAt: new Date().toISOString(), results });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -188,9 +286,16 @@ app.post('/api/sync/xskt', bridgeAuth, async (_req, res) => {
 app.post('/api/sync/full', bridgeAuth, async (req, res) => {
   try {
     const forwardFill = forwardFillOptsFromBody(req.body);
-    const vietlott = await syncVietlottAll(req.body);
+    const deep = !(req.body && req.body.shallow === true);
+    const vietlott = await syncVietlottAll(req.body, deep);
     const xskt = await syncXsktThreeRegions();
-    res.json({ success: true, forwardFill, vietlott, xskt });
+    res.json({
+      success: true,
+      mode: deep ? 'deep' : 'shallow',
+      forwardFill,
+      vietlott,
+      xskt,
+    });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -198,9 +303,24 @@ app.post('/api/sync/full', bridgeAuth, async (req, res) => {
 
 app.use(express.static(staticDir));
 
-app.listen(PORT, HOST, () => {
-  console.log('[local-bridge] Mở trình duyệt: http://127.0.0.1:' + PORT + '/');
-  console.log('[local-bridge] Cùng WiFi — thay bằng IP LAN máy này (ipconfig / ifconfig).');
-  if (BRIDGE_TOKEN) console.log('[local-bridge] Đã bật LOCAL_BRIDGE_TOKEN — nhập token trên trang web.');
-  if (!process.env.SUPABASE_URL) console.warn('[local-bridge] Cảnh báo: chưa thấy SUPABASE_URL trong .env');
-});
+const runSyncDeepCli = process.argv.includes('--sync-deep');
+
+if (runSyncDeepCli) {
+  (async () => {
+    console.log('[local-bridge] CLI --sync-deep (không mở HTTP)');
+    const results = await syncVietlottAll({}, true);
+    console.log(JSON.stringify(results, null, 2));
+    process.exit(0);
+  })().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+} else {
+  app.listen(PORT, HOST, () => {
+    console.log('[local-bridge] Mở trình duyệt: http://127.0.0.1:' + PORT + '/');
+    console.log('[local-bridge] Cùng WiFi — thay bằng IP LAN máy này (ipconfig / ifconfig).');
+    if (BRIDGE_TOKEN) console.log('[local-bridge] Đã bật LOCAL_BRIDGE_TOKEN — nhập token trên trang web.');
+    if (!process.env.SUPABASE_URL) console.warn('[local-bridge] Cảnh báo: chưa thấy SUPABASE_URL trong .env');
+    console.log('[local-bridge] Backfill ngày mặc định:', DEFAULT_BACKFILL_DAYS);
+  });
+}
