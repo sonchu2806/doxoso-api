@@ -2310,10 +2310,11 @@ function extractMinhNgocDrawDateFromCheerio($, urlSlug) {
 const MINH_NGOC_XSKT_TABLE_SEL =
   'table.bkqmiennam, table.bkqtmiennam, table.bkqmientrung, table[class*="bkq"], table.bangketquaSo';
 
-/** Độ dài mỗi số trúng theo giải (MN/MT); MB dùng bảng khác. */
-function xsktDigitsLenFromPrizeClass(cls) {
+/** Độ dài mỗi số trúng theo giải (MN/MT); MB có đặc biệt 5 số. */
+function xsktDigitsLenFromPrizeClass(cls, opts) {
+  const mienBac = !!(opts && opts.mienBac);
   const c = String(cls || '').toLowerCase();
-  if (c.includes('giaidb')) return 6;
+  if (c.includes('giaidb')) return mienBac ? 5 : 6;
   if (c.includes('giai8')) return 2;
   if (c.includes('giai7')) return 3;
   if (c.includes('giai5') || c.includes('giai6')) return 4;
@@ -2549,12 +2550,12 @@ function parseMienBacMinhNgocByCheerio(html) {
       .get()
       .filter((n) => n.length >= 2);
     if (nums.length === 1) {
-      const pref = xsktDigitsLenFromPrizeClass(cls);
+      const pref = xsktDigitsLenFromPrizeClass(cls, { mienBac: true });
       nums = splitConcatenatedXsktDigits(nums[0], pref);
     }
     if (nums.length === 0) {
       const raw = (cell.text() || '').replace(/\D/g, '');
-      nums = splitConcatenatedXsktDigits(raw, xsktDigitsLenFromPrizeClass(cls));
+      nums = splitConcatenatedXsktDigits(raw, xsktDigitsLenFromPrizeClass(cls, { mienBac: true }));
     }
     if (nums.length === 0) continue;
     prizes.push({ label, numbers: nums });
