@@ -1101,6 +1101,50 @@
     return parseViDate(s).getDay();
   }
 
+  function pad2(n) {
+    return String(Math.max(0, n)).padStart(2, '0');
+  }
+
+  function xsktDrawTimeByDai(dai) {
+    var mbDai = ['Hà Nội', 'Hải Phòng', 'Quảng Ninh', 'Bắc Ninh', 'Nam Định', 'Thái Bình'];
+    var mtDai = ['Đà Nẵng', 'Khánh Hòa', 'Huế', 'Quảng Nam', 'Bình Định', 'Phú Yên', 'Ninh Thuận', 'Gia Lai', 'Đắk Lắk'];
+    if (mbDai.indexOf(String(dai || '')) !== -1) return { h: 18, m: 15 };
+    if (mtDai.indexOf(String(dai || '')) !== -1) return { h: 17, m: 15 };
+    return { h: 16, m: 15 };
+  }
+
+  function getXsktNotYetDrawnMessage(dai, drawDateVi) {
+    var drawDate = parseViDate(drawDateVi);
+    var now = new Date();
+    var sameDay =
+      now.getFullYear() === drawDate.getFullYear() &&
+      now.getMonth() === drawDate.getMonth() &&
+      now.getDate() === drawDate.getDate();
+    if (!sameDay) return '';
+    var tm = xsktDrawTimeByDai(dai);
+    var drawAt = new Date(drawDate);
+    drawAt.setHours(tm.h, tm.m, 0, 0);
+    if (now >= drawAt) return '';
+    var totalSec = Math.max(0, Math.floor((drawAt.getTime() - now.getTime()) / 1000));
+    var hh = Math.floor(totalSec / 3600);
+    var mm = Math.floor((totalSec % 3600) / 60);
+    var ss = totalSec % 60;
+    return (
+      'chưa có kết quả quay số, kết quả sẽ có sau ' +
+      pad2(hh) +
+      ':' +
+      pad2(mm) +
+      ':' +
+      pad2(ss) +
+      ' ' +
+      pad2(drawAt.getDate()) +
+      '/' +
+      pad2(drawAt.getMonth() + 1) +
+      '/' +
+      drawAt.getFullYear()
+    );
+  }
+
   function daiOptions() {
     var w = weekdayFromVi(state.xsktDate);
     return XSKT_SCHEDULE[state.xsktRegion][w] || [];
@@ -2080,6 +2124,11 @@
       var need = mbDai.indexOf(state.xsktDai) !== -1 ? 5 : 6;
       if (xd.length !== need) {
         toast('Vui lòng nhập đủ ' + need + ' số vé!');
+        return;
+      }
+      var preMsg = getXsktNotYetDrawnMessage(state.xsktDai, state.xsktDate);
+      if (preMsg) {
+        toast(preMsg);
         return;
       }
       state.loading = true;
