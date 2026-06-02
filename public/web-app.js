@@ -1125,23 +1125,20 @@
     var drawAt = new Date(drawDate);
     drawAt.setHours(tm.h, tm.m, 0, 0);
     if (now >= drawAt) return '';
-    var totalSec = Math.max(0, Math.floor((drawAt.getTime() - now.getTime()) / 1000));
-    var hh = Math.floor(totalSec / 3600);
-    var mm = Math.floor((totalSec % 3600) / 60);
-    var ss = totalSec % 60;
+    var hh = pad2(drawAt.getHours());
+    var mm = pad2(drawAt.getMinutes());
     return (
-      'chưa có kết quả quay số, kết quả sẽ có sau ' +
-      pad2(hh) +
+      'Chưa có kết quả quay số. Kết quả sẽ có sau ' +
+      hh +
       ':' +
-      pad2(mm) +
-      ':' +
-      pad2(ss) +
+      mm +
       ' ' +
       pad2(drawAt.getDate()) +
       '/' +
       pad2(drawAt.getMonth() + 1) +
       '/' +
-      drawAt.getFullYear()
+      drawAt.getFullYear() +
+      '.'
     );
   }
 
