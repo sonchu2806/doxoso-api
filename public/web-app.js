@@ -123,7 +123,12 @@
   }
 
   function xsktTicketComplete() {
-    return state.channel === 'xskt' && state.tab === 'do' && state.xsktTicket.replace(/\D/g, '').length === 6;
+    if (state.channel === 'xskt' && state.tab === 'do') {
+      var mbDai = ['Hà Nội', 'Hải Phòng', 'Quảng Ninh', 'Bắc Ninh', 'Nam Định', 'Thái Bình'];
+      var need = mbDai.indexOf(state.xsktDai) !== -1 ? 5 : 6;
+      return state.xsktTicket.replace(/\D/g, '').length === need;
+    }
+    return false;
   }
 
   function scrollIntoViewSmooth(el, block) {
@@ -1574,6 +1579,10 @@
     var w = weekdayFromVi(state.xsktDate);
     var opts = daiOptions();
     if (opts.indexOf(state.xsktDai) === -1 && opts[0]) state.xsktDai = opts[0];
+    var mbDai = ['Hà Nội', 'Hải Phòng', 'Quảng Ninh', 'Bắc Ninh', 'Nam Định', 'Thái Bình'];
+    var ticketLen = mbDai.indexOf(state.xsktDai) !== -1 ? 5 : 6;
+    var digits = state.xsktTicket.replace(/\D/g, '').slice(0, ticketLen);
+    if (state.xsktTicket !== digits) state.xsktTicket = digits;
     var reg = { mb: 'Miền Bắc', mn: 'Miền Nam', mt: 'Miền Trung' };
     var wl = { 1: 'Thứ 2', 2: 'Thứ 3', 3: 'Thứ 4', 4: 'Thứ 5', 5: 'Thứ 6', 6: 'Thứ 7', 0: 'Chủ Nhật' };
     return (
@@ -1611,12 +1620,12 @@
           );
         })
         .join('') +
-      '</div><p style="font-size:12px;color:#6F7682;margin:8px 0 4px">Nhập hoặc dán 6 số vé (một lần)</p><div class="ticket-box ticket-box-visible"><input id="xskt-in" class="xskt-ticket-visible" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="······" value="' +
-      escapeHtml(state.xsktTicket.replace(/\D/g, '')) +
+      '</div><p style="font-size:12px;color:#6F7682;margin:8px 0 4px">Nhập hoặc dán ' + ticketLen + ' số vé (một lần)</p><div class="ticket-box ticket-box-visible"><input id="xskt-in" class="xskt-ticket-visible" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="' + ticketLen + '" autocomplete="one-time-code" placeholder="' + (ticketLen === 5 ? '·····' : '······') + '" value="' +
+      escapeHtml(digits) +
       '" /></div><p id="xskt-ticket-hint" class="sel-hint' +
-      (state.xsktTicket.replace(/\D/g, '').length === 6 ? ' ok' : '') +
+      (digits.length === ticketLen ? ' ok' : '') +
       '" style="margin-top:8px">' +
-      (state.xsktTicket.replace(/\D/g, '').length === 6 ? 'Đã nhập đủ 6 số.' : 'Nhập đủ 6 số để dò.') +
+      (digits.length === ticketLen ? ('Đã nhập đủ ' + ticketLen + ' số.') : ('Nhập đủ ' + ticketLen + ' số để dò.')) +
       '</p></div>' +
       MOMO_CONSENT_HTML +
       '<button type="button" class="btn-check" id="btn-check" style="background:#F5C840"' +
@@ -1964,7 +1973,9 @@
         }
       }
       if (t.id === 'xskt-in') {
-        var digits = String(t.value).replace(/\D/g, '').slice(0, 6);
+        var mbDai = ['Hà Nội', 'Hải Phòng', 'Quảng Ninh', 'Bắc Ninh', 'Nam Định', 'Thái Bình'];
+        var ticketLen = mbDai.indexOf(state.xsktDai) !== -1 ? 5 : 6;
+        var digits = String(t.value).replace(/\D/g, '').slice(0, ticketLen);
         state.xsktTicket = digits;
         if (t.value !== digits) t.value = digits;
         state.apiResult = state.checkResult = null;
@@ -1972,8 +1983,8 @@
         if (res) res.remove();
         var hint = document.getElementById('xskt-ticket-hint');
         if (hint) {
-          hint.classList.toggle('ok', digits.length === 6);
-          hint.textContent = digits.length === 6 ? 'Đã nhập đủ 6 số.' : 'Nhập đủ 6 số để dò.';
+          hint.classList.toggle('ok', digits.length === ticketLen);
+          hint.textContent = digits.length === ticketLen ? ('Đã nhập đủ ' + ticketLen + ' số.') : ('Nhập đủ ' + ticketLen + ' số để dò.');
         }
       }
     });
@@ -2065,8 +2076,10 @@
     if (state.loading) return;
     if (state.channel === 'xskt') {
       var xd = state.xsktTicket.replace(/\D/g, '');
-      if (xd.length !== 6) {
-        toast('Vui lòng nhập đủ 6 số vé!');
+      var mbDai = ['Hà Nội', 'Hải Phòng', 'Quảng Ninh', 'Bắc Ninh', 'Nam Định', 'Thái Bình'];
+      var need = mbDai.indexOf(state.xsktDai) !== -1 ? 5 : 6;
+      if (xd.length !== need) {
+        toast('Vui lòng nhập đủ ' + need + ' số vé!');
         return;
       }
       state.loading = true;
