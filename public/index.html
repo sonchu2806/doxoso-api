@@ -137,7 +137,25 @@
     .nav-scan.on .pill { box-shadow: 0 0 0 2px #EB2F98, 0 0 0 4px #fff; }
     .result { margin-top: 12px; background: #fff; border-radius: 12px; border: 1px solid #E8EAF0; padding: 12px; }
     .result h3 { margin: 0; font-size: 15px; font-weight: 800; }
-    .toast { position: fixed; top: 12px; left: 12px; right: 12px; background: #303233; color: #fff; padding: 12px; border-radius: 10px; font-size: 14px; z-index: 100; display: none; }
+    .toast {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      max-width: min(92vw, 360px);
+      width: max-content;
+      background: rgba(48, 50, 51, 0.96);
+      color: #fff;
+      padding: 14px 18px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.45;
+      text-align: center;
+      z-index: 300;
+      display: none;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
+      pointer-events: none;
+    }
     .saved-card { border-radius: 14px; border: 1px solid #E6DCE0; padding: 12px 12px 12px 14px; margin-bottom: 10px; position: relative; background: #FCFCFE; }
     .saved-card.win { border-color: #BEE8CF; background: #F2FFF7; }
     .saved-card .stripe { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: 14px 0 0 14px; background: #6C63FF; }

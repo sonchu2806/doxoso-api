@@ -1519,36 +1519,61 @@ async function scrapeVietlott(product, kyso, opts) {
     }
   }
 
-  const cacheKey = 'vl_' + product + (kyso ? '_' + kyso : '');
-  if (!forceNetwork) {
-    const cached = getCache(cacheKey);
-    if (cached) return cached;
+  const requestedNoKy = !(kyso != null && String(kyso).trim() !== '');
+  let effectiveKy =
+    kyso != null && String(kyso).trim() !== '' ? padVietlottId(product, String(kyso).trim()) : '';
+
+  if (!effectiveKy) {
+    const latestSb = await getLatestVietlottFromSupabase(product);
+    if (latestSb && vietlottResultHasPayload(latestSb)) {
+      effectiveKy = padVietlottId(product, latestSb.kySo || '');
+      if (!forceNetwork) {
+        const ck = 'vl_' + product + '_' + effectiveKy;
+        setCache(ck, latestSb);
+        return latestSb;
+      }
+    }
   }
 
   let info = null;
-  if (!kyso) {
+  if (!effectiveKy) {
     info = await getCurrentInfo(product, { skipCache: forceNetwork });
-    const curId =
+    effectiveKy =
       info?.currentKy != null && String(info.currentKy).trim() !== ''
         ? padVietlottId(product, info.currentKy)
         : '';
-    if (curId && !forceNetwork) {
-      const sbData = await getVietlottFromSupabase(product, curId);
-      if (sbData) {
-        setCache(cacheKey, sbData);
-        return sbData;
-      }
-    }
-  } else if (!forceNetwork) {
-    const sbData = await getVietlottFromSupabase(product, kyso);
-    if (sbData) {
+  }
+
+  if (!effectiveKy) {
+    throw new Error('Không xác định được kỳ quay cho ' + product);
+  }
+
+  const cacheKey = 'vl_' + product + '_' + effectiveKy;
+  if (!forceNetwork) {
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+    const sbData = await getVietlottFromSupabase(product, effectiveKy);
+    if (sbData && vietlottResultHasPayload(sbData)) {
       setCache(cacheKey, sbData);
       return sbData;
     }
   }
 
-  // Keno không kyso: trước tiên 1–13 request chi tiết theo kỳ từ winning-number-keno; probe rộng chỉ khi cần.
-  if (product === 'keno' && !kyso) {
+  kyso = effectiveKy;
+
+  const detailFirstProducts = ['mega', 'power', 'lotto535', 'keno'];
+  if (detailFirstProducts.includes(product)) {
+    const viaDetail = await scrapeVietlottDetailOnly(product, kyso, { forceNetwork });
+    if (viaDetail && vietlottResultHasPayload(viaDetail)) {
+      const rowKy = padVietlottId(product, viaDetail.kySo || kyso);
+      if (rowKy) viaDetail.kySo = rowKy;
+      setCache(cacheKey, viaDetail);
+      return viaDetail;
+    }
+  }
+
+  // Keno không gửi kyso: probe listing (fallback sau khi detail/DB không đủ).
+  if (product === 'keno' && requestedNoKy) {
     const viaDetail = await fetchKenoNoKysoViaDetailAxios(info, cacheKey);
     if (viaDetail) return viaDetail;
 

@@ -1183,6 +1183,9 @@
       .then(function (j) {
         if (j.success && Array.isArray(j.data)) state.kyList = j.data;
         else state.kyList = [];
+        if (!state.ky.trim() && state.kyList.length && state.kyList[0].kyso) {
+          state.ky = String(state.kyList[0].kyso);
+        }
         render();
       })
       .catch(function () {
@@ -1512,13 +1515,32 @@
     var b = BANNERS[state.product] || BANNERS.keno;
     var kyBlock = '';
     if (['keno', 'mega', 'power', 'max3d', 'max3dpro', 'lotto535'].indexOf(state.product) !== -1) {
+      var latestRow = state.kyList[0];
+      var latestKyVal = latestRow && latestRow.kyso ? String(latestRow.kyso) : '';
+      var isLatestKy =
+        latestKyVal && (!String(state.ky || '').trim() || String(state.ky) === latestKyVal);
       kyBlock =
-        '<label class="ky-row">📋 <select id="ky-select"><option value="">' +
+        '<label class="ky-row">📋 <select id="ky-select"><option value="' +
+        escapeHtml(latestKyVal) +
+        '"' +
+        (isLatestKy ? ' selected' : '') +
+        '>' +
         escapeHtml(latestKyOptionLabel()) +
         '</option>' +
         state.kyList
           .map(function (x) {
-            return '<option value="' + escapeHtml(x.kyso) + '"' + (state.ky === x.kyso ? ' selected' : '') + '>Kỳ #' + escapeHtml(x.kyso) + ' · ' + escapeHtml(formatKyRowDateVi(x.date)) + '</option>';
+            if (latestKyVal && String(x.kyso) === latestKyVal) return '';
+            return (
+              '<option value="' +
+              escapeHtml(x.kyso) +
+              '"' +
+              (state.ky === x.kyso ? ' selected' : '') +
+              '>Kỳ #' +
+              escapeHtml(x.kyso) +
+              ' · ' +
+              escapeHtml(formatKyRowDateVi(x.date)) +
+              '</option>'
+            );
           })
           .join('') +
         '</select></label>';
@@ -2198,7 +2220,7 @@
 
     state.loading = true;
     render();
-    var kyApi = state.ky.trim() || undefined;
+    var kyApi = state.ky.trim() || (state.kyList[0] && state.kyList[0].kyso) || undefined;
 
     function afterVietlott(result) {
       var drawId = result.kySo || state.ky;
