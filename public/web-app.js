@@ -808,7 +808,10 @@
         ? API_BASE + '/vietlott/' + product + '?kyso=' + encodeURIComponent(String(kyso).trim())
         : API_BASE + '/vietlott/' + product;
     return fetchJSON(u).then(function (j) {
-      if (!j.success) throw new Error(j.error || 'Lỗi');
+      if (!j.success) {
+        if (j.code === 'DRAWING' || j.error === DRAWING_MSG) throw new Error(DRAWING_MSG);
+        throw new Error(j.error || 'Lỗi');
+      }
       return j.data;
     });
   }
@@ -820,7 +823,10 @@
         ? API_BASE + '/xskt?dai=' + encodeURIComponent(dai) + '&date=' + encodeURIComponent(norm)
         : API_BASE + '/xskt?dai=' + encodeURIComponent(dai);
     return fetchJSON(u).then(function (j) {
-      if (!j.success) throw new Error(j.error || 'Lỗi');
+      if (!j.success) {
+        if (j.code === 'DRAWING' || j.error === DRAWING_MSG) throw new Error(DRAWING_MSG);
+        throw new Error(j.error || 'Lỗi');
+      }
       return j.data;
     });
   }
@@ -1111,6 +1117,61 @@
     if (mbDai.indexOf(String(dai || '')) !== -1) return { h: 18, m: 15 };
     if (mtDai.indexOf(String(dai || '')) !== -1) return { h: 17, m: 15 };
     return { h: 16, m: 15 };
+  }
+
+  var DRAWING_MSG = 'Đang quay số';
+
+  function getXsktPastDrawTime(dai, drawDateVi) {
+    var drawDate = parseViDate(drawDateVi);
+    var now = new Date();
+    var sameDay =
+      now.getFullYear() === drawDate.getFullYear() &&
+      now.getMonth() === drawDate.getMonth() &&
+      now.getDate() === drawDate.getDate();
+    if (!sameDay) return false;
+    var tm = xsktDrawTimeByDai(dai);
+    var drawAt = new Date(drawDate);
+    drawAt.setHours(tm.h, tm.m, 0, 0);
+    return now >= drawAt;
+  }
+
+  function isVietlottDrawingWindowLocal(product, kyso) {
+    var days = {
+      mega: [0, 3, 5],
+      power: [2, 4, 6],
+      max3d: [1, 3, 5],
+      max3dpro: [2, 4, 6],
+      lotto535: [0, 1, 2, 3, 4, 5, 6],
+      keno: [0, 1, 2, 3, 4, 5, 6],
+    };
+    var dlist = days[product];
+    if (!dlist) return false;
+    var now = new Date();
+    if (dlist.indexOf(now.getDay()) === -1) return false;
+    var latest = state.kyList[0] && state.kyList[0].kyso ? String(state.kyList[0].kyso) : '';
+    if (kyso && latest) {
+      var n = String(kyso).replace(/\D/g, '');
+      var l = String(latest).replace(/\D/g, '');
+      if (product === 'keno') {
+        n = n.padStart(7, '0');
+        l = l.padStart(7, '0');
+      } else {
+        n = n.padStart(5, '0');
+        l = l.padStart(5, '0');
+      }
+      if (n && l && n !== l) return false;
+    }
+    var hm = now.getHours() * 60 + now.getMinutes();
+    if (product === 'keno') return hm >= 360 && hm < 23 * 60 + 45;
+    return hm >= 18 * 60 && hm < 22 * 60 + 30;
+  }
+
+  function resolveDrawingMessage(err, channel, product, kyso, xsktDai, xsktDate) {
+    var msg = (err && err.message) || String(err || '');
+    if (msg === DRAWING_MSG) return DRAWING_MSG;
+    if (channel === 'xskt' && getXsktPastDrawTime(xsktDai, xsktDate)) return DRAWING_MSG;
+    if (channel === 'vietlott' && isVietlottDrawingWindowLocal(product, kyso)) return DRAWING_MSG;
+    return msg;
   }
 
   function getXsktNotYetDrawnMessage(dai, drawDateVi) {
@@ -2170,7 +2231,7 @@
           });
         })
         .catch(function (err) {
-          toast(err.message || String(err));
+          toast(resolveDrawingMessage(err, 'xskt', '', '', state.xsktDai, state.xsktDate));
         })
         .finally(function () {
           state.loading = false;
@@ -2290,7 +2351,7 @@
     fetchVietlott(state.product, kyApi)
       .then(afterVietlott)
       .catch(function (err) {
-        toast(err.message || String(err));
+        toast(resolveDrawingMessage(err, 'vietlott', state.product, kyApi, '', ''));
         state.apiResult = state.checkResult = null;
       })
       .finally(function () {

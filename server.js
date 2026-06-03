@@ -24,6 +24,11 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const scanTicket = require('./scan-ticket');
 const vs = require('./vietlott-scrape');
+const {
+  drawingResponse,
+  isXsktPastDrawTime,
+  isVietlottDrawingWindow,
+} = require('./draw-status');
 
 const scanUpload = multer({
   storage: multer.memoryStorage(),
@@ -46,6 +51,7 @@ const {
   saveVietlottToSupabase,
   saveXSKTToSupabase,
   getVietlottFromSupabase,
+  getLatestVietlottFromSupabase,
   getXSKTFromSupabase,
   getVietlottKyListFromSupabase,
   getCurrentInfo,
@@ -267,11 +273,15 @@ app.get('/xskt', async (req, res) => {
   const { dai, date, region } = req.query;
   if (!dai) return res.status(400).json({ success: false, error: 'Thiếu tham số dai' });
   const forceNetwork = req.query.refresh === '1' || req.query.force === '1';
+  const drawDateVi = date || toViDate(new Date());
   try {
     const result = await scrapeXSKT(dai, date, region, { forceNetwork });
     res.json({ success: true, data: result });
   } catch(e) {
     console.error('XSKT error:', e.message);
+    if (isXsktPastDrawTime(dai, drawDateVi)) {
+      return res.json(drawingResponse());
+    }
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -741,11 +751,20 @@ app.get('/vietlott/:product/list', async (req, res) => {
 
 app.get('/vietlott/:product', async (req, res) => {
   const { kyso } = req.query;
+  const product = req.params.product;
   try {
-    const result = await scrapeVietlott(req.params.product, kyso);
+    const result = await scrapeVietlott(product, kyso);
     res.json({ success: true, data: result });
   } catch(e) {
     console.error('Vietlott error:', e.message);
+    let latestKyso = '';
+    try {
+      const latest = await getLatestVietlottFromSupabase(product);
+      if (latest && latest.kySo) latestKyso = String(latest.kySo);
+    } catch (_) {}
+    if (isVietlottDrawingWindow(product, { kyso, latestKyso })) {
+      return res.json(drawingResponse());
+    }
     res.status(500).json({ success: false, error: e.message });
   }
 });
